@@ -1,0 +1,15 @@
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
+
+void app_main(void)
+{
+    printf("Hello from ESP-IDF %s, target %s\n",
+           esp_get_idf_version(), CONFIG_IDF_TARGET);
+
+    while (1) {
+        printf("esp32-start is running\n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}

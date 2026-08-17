@@ -1,0 +1,17 @@
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.before_*
+sdkconfig.psram_*
+managed_components/
+dependencies.lock
+.cache/
+compile_commands.json
+/CMakeUserPresets.json
+*.pyc
+__pycache__/
+*.log
+*.rar
+*.zip
+*.7z
+.workbuddy/
