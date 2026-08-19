@@ -1,8 +1,10 @@
 {
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
   "idf.port": "COM3",
   "idf.flashType": "UART",
   "files.associations": {
     "*.c": "c",
     "*.h": "c"
-  }
+  },
+  "idf.portWin": "COM3"
 }
