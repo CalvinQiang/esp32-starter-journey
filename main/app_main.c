@@ -1,12 +1,13 @@
 /**
  * ============================================================================
- * 关卡 2：GPIO 输出控制与 PWM 呼吸灯（点亮物理世界的第一颗灯）
+ * 第 03 关：ESP32 按键输入检测与人体红外感应（感知现实世界的输入）
  * ============================================================================
  * 
  * 学习目标：
- * 1. 理解什么是 GPIO（通用输入输出引脚）以及数字高低电平（3.3V / 0V）。
- * 2. 掌握使用 gpio_set_level() 控制板载蓝色 LED2（GPIO27）以 500ms 频率闪烁（Blink）。
- * 3. 掌握使用 LEDC (LED Controller) 外设与 PWM（脉冲宽度调制）实现平滑的“呼吸灯”效果。
+ * 1. 理解数字输入（GPIO Input）原理与高低电平判定机制。
+ * 2. 掌握用户按键 SW3 (GPIO39) 的电平读取、机械抖动成因与 20ms 软件消抖法。
+ * 3. 掌握 SR602 人体红外传感器 (GPIO34) 的电平监测与智能夜灯逻辑。
+ * 4. 熟记 ESP32 纯输入管脚（GPIO34/35/36/39）的硬件约束与使用规范。
  * ============================================================================
  */
 
@@ -14,119 +15,94 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
-#include "driver/ledc.h"
 #include "esp_log.h"
 
-static const char *TAG = "LEVEL_2_LED";
+static const char *TAG = "LEVEL_3_INPUT";
 
-// 开发板板载可编程蓝色 LED2 对应的引脚为 GPIO27
-#define LED_PIN GPIO_NUM_27
+// 引脚定义速查
+#define LED_PIN         GPIO_NUM_27  // 板载受控指示灯 LED2 (输出)
+#define BUTTON_PIN      GPIO_NUM_39  // 用户按键 SW3 (输入专用，按下为 0，松开为 1)
+#define PIR_PIN         GPIO_NUM_34  // SR602 人体红外探头 (输入专用，有人为 1，无人为 0)
 
-// PWM 呼吸灯相关硬件参数配置
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO          LED_PIN
-#define LEDC_CHANNEL            LEDC_CHANNEL_0
-#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // 13 位分辨率：最大占空比为 2^13 - 1 = 8191
-#define LEDC_FREQUENCY          (5000)            // PWM 频率 5000 Hz (5 kHz)，肉眼绝无闪烁
+// 全局状态记录
+static bool g_led_state = false; // 当前灯的亮灭状态 (false: 灭, true: 亮)
 
 /**
- * @brief 阶段一：基础 GPIO 输出模式初始化（用于普通闪烁）
+ * @brief 初始化所有 GPIO 引脚
  */
-static void init_led_gpio(void)
+static void init_system_gpios(void)
 {
-    // 1. 重置引脚为默认状态
+    // 1. 初始化输出引脚：LED2 (GPIO27)
     gpio_reset_pin(LED_PIN);
-    // 2. 将引脚设置为输出模式 (Output)
     gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
-    // 3. 默认输出低电平（初始熄灭）
-    gpio_set_level(LED_PIN, 0);
+    gpio_set_level(LED_PIN, 0); // 默认初始状态熄灭
 
-    ESP_LOGI(TAG, "GPIO27 初始化完成，当前处于普通数字输出模式");
-}
+    // 2. 初始化输入引脚：用户按键 SW3 (GPIO39)
+    // ⚠️ 注意：GPIO39 为纯输入管脚，不支持软件内部上拉/下拉，硬件外部已带有上拉电阻
+    gpio_reset_pin(BUTTON_PIN);
+    gpio_set_direction(BUTTON_PIN, GPIO_MODE_INPUT);
 
-/**
- * @brief 阶段二：LEDC (PWM) 外设初始化（用于呼吸灯渐变）
- */
-static void init_ledc_pwm(void)
-{
-    // 1. 配置 LEDC 定时器 (频率 5kHz, 13位分辨率)
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode       = LEDC_MODE,
-        .duty_resolution  = LEDC_DUTY_RES,
-        .timer_num        = LEDC_TIMER,
-        .freq_hz          = LEDC_FREQUENCY,
-        .clk_cfg          = LEDC_AUTO_CLK
-    };
-    ledc_timer_config(&ledc_timer);
+    // 3. 初始化输入引脚：SR602 人体红外探头 (GPIO34)
+    // ⚠️ 注意：GPIO34 同样为纯输入管脚
+    gpio_reset_pin(PIR_PIN);
+    gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
 
-    // 2. 配置 LEDC 输出通道并绑定到 GPIO27
-    ledc_channel_config_t ledc_channel = {
-        .speed_mode     = LEDC_MODE,
-        .channel        = LEDC_CHANNEL,
-        .timer_sel      = LEDC_TIMER,
-        .intr_type      = LEDC_INTR_DISABLE,
-        .gpio_num       = LEDC_OUTPUT_IO,
-        .duty           = 0, // 初始占空比为 0 (完全熄灭)
-        .hpoint         = 0
-    };
-    ledc_channel_config(&ledc_channel);
-
-    ESP_LOGI(TAG, "LEDC PWM 外设初始化完成，已开启 13 位硬件渐变呼吸模式");
+    ESP_LOGI(TAG, "GPIO 初始化完成: LED2 (输出), SW3按键 (输入), SR602红外 (输入)");
 }
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "==================================================");
-    ESP_LOGI(TAG, "   🎉 关卡 2 启动：板载蓝色 LED2 (GPIO27) 教学    ");
+    ESP_LOGI(TAG, "   🎉 关卡 3 启动：按键输入与人体红外感知教学     ");
     ESP_LOGI(TAG, "==================================================");
 
-    // -------------------------------------------------------------
-    // 【实战演练 1】：基础闪烁演示（Blink）—— 快速闪烁 6 次（3秒）
-    // -------------------------------------------------------------
-    init_led_gpio();
-    ESP_LOGI(TAG, ">>> [模式 1] 开始执行基础闪烁演示 (Blink) 6 次...");
+    init_system_gpios();
 
-    for (int i = 1; i <= 6; i++) {
-        ESP_LOGI(TAG, "-> 第 %d 次点亮 LED (高电平 3.3V)", i);
-        gpio_set_level(LED_PIN, 1);       // 输出高电平：点亮 LED2
-        vTaskDelay(pdMS_TO_TICKS(500));   // 亮 500ms
+    int pir_last_state = -1; // 记录上一次红外状态，防止刷屏日志
+    int button_last_level = 1; // 按键平时松开为高电平 1
 
-        ESP_LOGI(TAG, "-> 第 %d 次熄灭 LED (低电平 0V)", i);
-        gpio_set_level(LED_PIN, 0);       // 输出低电平：熄灭 LED2
-        vTaskDelay(pdMS_TO_TICKS(500));   // 灭 500ms
-    }
-
-    // -------------------------------------------------------------
-    // 【实战演练 2】：PWM 硬件呼吸灯（渐亮渐暗，无限循环）
-    // -------------------------------------------------------------
-    ESP_LOGI(TAG, "--------------------------------------------------");
-    ESP_LOGI(TAG, ">>> [模式 2] 切换至 PWM 呼吸灯模式 (平滑呼吸循环)...");
-    init_ledc_pwm();
-
-    // 13 位分辨率的最大亮度值为 8191
-    const int max_duty = (1 << 13) - 1;
-    const int step = 150; // 亮度每次递增/递减的步长
+    ESP_LOGI(TAG, ">>> 系统已就绪，请按下板载按键 SW3，或用手靠近 SR602 红外探头...");
 
     while (1) {
-        // 1. 从暗到亮（吸气渐亮）
-        for (int duty = 0; duty <= max_duty; duty += step) {
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
-            vTaskDelay(pdMS_TO_TICKS(20)); // 每 20ms 调高一次亮度
+        // -------------------------------------------------------------
+        // 【输入检测 1】：用户按键 SW3 扫描与 20ms 软件消抖
+        // -------------------------------------------------------------
+        int current_btn_level = gpio_get_level(BUTTON_PIN);
+
+        // 如果检测到按键从未按下(1)变为了按下(0)
+        if (button_last_level == 1 && current_btn_level == 0) {
+            // 💡 软件消抖：延时 20 毫秒跳过机械金属弹片的弹性抖动区
+            vTaskDelay(pdMS_TO_TICKS(20));
+
+            // 二次确认：20ms 之后如果依然是低电平 0，才真正判定为“有效按下”
+            if (gpio_get_level(BUTTON_PIN) == 0) {
+                // 翻转 LED 状态 (开灯变关灯，关灯变开灯)
+                g_led_state = !g_led_state;
+                gpio_set_level(LED_PIN, g_led_state ? 1 : 0);
+
+                ESP_LOGI(TAG, "🔘 [按键触发] 用户按下了 SW3！当前指示灯切换为: %s", 
+                         g_led_state ? "🟢【点亮】" : "⚪【熄灭】");
+            }
+        }
+        // 更新按键的历史电平状态
+        button_last_level = current_btn_level;
+
+        // -------------------------------------------------------------
+        // 【输入检测 2】：SR602 人体红外探头状态监测
+        // -------------------------------------------------------------
+        int current_pir_state = gpio_get_level(PIR_PIN);
+
+        // 只有当红外状态发生变化时（有人来 / 有人走），才打印日志
+        if (current_pir_state != pir_last_state) {
+            if (current_pir_state == 1) {
+                ESP_LOGW(TAG, "🚶‍♂️ [红外感应] 探测到人体活动！(GPIO34 = 1 高电平)");
+            } else {
+                ESP_LOGI(TAG, "🍃 [红外感应] 人体离开或静止无感应。(GPIO34 = 0 低电平)");
+            }
+            pir_last_state = current_pir_state;
         }
 
-        // 2. 在最高亮度稍微保持 100ms
-        vTaskDelay(pdMS_TO_TICKS(100));
-
-        // 3. 从亮到暗（呼气渐暗）
-        for (int duty = max_duty; duty >= 0; duty -= step) {
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
-            vTaskDelay(pdMS_TO_TICKS(20)); // 每 20ms 调低一次亮度
-        }
-
-        // 4. 在完全熄灭状态稍微停顿 200ms
-        vTaskDelay(pdMS_TO_TICKS(200));
+        // 极短休眠 10ms，既不漏掉按键点击，又把算力让给后台系统
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
