@@ -1,30 +1,44 @@
-# 第 01 章：串口通信与 Hello World 深度剖析
+# 第 01 章：串口通信与 Hello World 深度剖析（大师级进阶精讲）
 
-> **本章导读**：在桌面软件开发中，`printf("Hello, World!\n")` 往往只是几行简单的代码；但在嵌入式系统与单片机开发中，“让电脑屏幕打印出第一行文字”意味着芯片供电建立、时钟晶振起振、Bootloader 引导成功、FreeRTOS 内核就绪、UART 串口控制器配置无误以及 USB 转串口芯片链路完全打通。本章将以显微镜级的视角，深度剖析这一看似简单却至关重要的基石程序，带你彻底搞懂背后的语法、架构、内存分配与操作系统机制。
-
----
-
-## 1.1 实验目标与学习收获
-
-完成本章学习后，你将掌握：
-1. **启动与入口机制**：理解 ESP-IDF 底层启动过程，以及 `void app_main(void)` 与桌面 C 语言 `int main()` 的根本区别。
-2. **构建与依赖系统**：掌握 ESP-IDF 的“积木式”组件化管理体系，搞懂 `#include` 引用规则与 `CMakeLists.txt` 中的 `REQUIRES` 依赖声明。
-3. **C 语言嵌入式修饰符**：理解 `static`、`const` 在嵌入式内存分布（Flash 与 RAM）中的核心作用，以及 `%" PRIu32 "` 跨平台格式化输出原理。
-4. **工业级日志系统**：熟练运用 ESP-IDF 标准日志宏（`ESP_LOGI`、`ESP_LOGE`、`ESP_LOGW` 等）替代裸 `printf`，掌握时间戳、标签过滤与日志级别配置。
-5. **系统 API 与底层指针**：理解结构体地址传参（`&chip_info`）、位掩码（Bitmask）特性检测、`esp_err_t` 工业级错误码机制与 SRAM 堆内存（Heap）健康监控。
-6. **FreeRTOS 调度与延时原理**：深刻理解 `while(1)` 死循环的必要性、系统节拍（Tick）、`pdMS_TO_TICKS()` 换算公式，以及**为何绝对禁止空循环死等（防止触发看门狗 WDT 复位）**。
+> **本章导读**：在桌面软件开发中，`printf("Hello, World!\n")` 往往只是几行平淡无奇的代码；但在嵌入式系统与单片机底层开发中，“让电脑屏幕打印出第一行文字”意味着芯片供电建立、时钟晶振起振、Bootloader 引导成功、FreeRTOS 内核就绪、UART 串口控制器配置无误以及 USB 转串口芯片链路完全打通。
+> 本章将以**出版级教材标准**，从**硬件物理层、芯片启动流程、C语言内存模型、CMake构建系统、ESP-IDF日志架构到FreeRTOS内核多任务调度**进行全方位的深度拆解，为你铺平整个嵌入式开发的底层认知基石。
 
 ---
 
-## 1.2 硬件链路与通信原理
+## 1.1 实验目标与知识全景地图
 
-在 ESP32 上执行串口输出的底层硬件链路如下图所示：
+```
+                    ┌────────────────────────────────────────────────────────┐
+                    │               第 01 章 核心知识全景图                    │
+                    └────────────────────────────────────────────────────────┘
+                                                │
+         ┌──────────────────┬───────────────────┼───────────────────┬──────────────────┐
+         ▼                  ▼                   ▼                   ▼                  ▼
+  【硬件物理链路】    【芯片启动全流程】    【构建系统与依赖】    【C语法与内存模型】   【FreeRTOS调度内核】
+  · TTL电平与波形     · 一级ROM Bootloader · CMake积木式架构   · Flash与SRAM分段     · 任务状态机与TCB
+  · 115200波特率时序  · 二级Flash引导      · REQUIRES机制      · const/.rodata优化   · SysTick节拍中断
+  · UART FIFO硬件队列 · FreeRTOS主任务创建 · 依赖项防循环引用  · 跨平台PRIu32标准   · 看门狗(WDT)工作机制
+```
+
+完成本章学习后，你将能够：
+1. **洞悉启动全貌**：清晰阐述 ESP32 从上电复位向量（Reset Vector）到执行 `app_main()` 的三个阶段。
+2. **理解底层存储**：搞懂只读数据段（`.rodata`）、代码段（`.text`）、数据段（`.data`）、未初始化段（`.bss`）与堆栈（Heap/Stack）的物理分布。
+3. **掌握工程规范**：熟练运用 CMake 组件依赖关系、ANSI 终端转义色彩、ESP-IDF 5 级日志过滤与宏机制。
+4. **精通多任务原理**：深刻理解 FreeRTOS 时间片轮转、Tick 节拍中断、任务让出机制及看门狗防死锁机制。
+
+---
+
+## 1.2 硬件物理链路与微观时序通信原理
+
+### 1. 硬件连接拓扑图
+
+在 ESP32 上执行串口输出的底层硬件拓扑如下：
 
 ```mermaid
 flowchart LR
     subgraph ESP32 ["ESP32 主控芯片 (3.3V 逻辑)"]
-        CPU["Xtensa 双核 CPU\n(执行 app_main)"] --> FIFO["UART0 发送缓冲区\n(TX FIFO 硬件寄存器)"]
-        FIFO --> PinTX["GPIO1 (TXD0 管脚)"]
+        CPU["Xtensa 双核 CPU\n(执行 app_main)"] --> Reg["UART0 控制器\n(FIFO 硬件队列)"]
+        Reg --> PinTX["GPIO1 (TXD0 引脚)"]
     end
 
     subgraph Board ["开发板板载硬件"]
@@ -38,62 +52,128 @@ flowchart LR
     end
 ```
 
-### 通信核心参数
-* **电平标准**：TTL 数字电平（高电平为 3.3V，低电平为 0V）。
-* **波特率 (Baud Rate)**：**115200 bps**（即每秒传输 115200 个二进制位）。
-* **帧格式**：`115200, 8, N, 1`（8 位数据位，无奇偶校验位 No Parity，1 位停止位）。
+### 2. 什么是 TTL 串口？微观时间线与波形解密
+
+串口通信（UART，通用异步收发器）是**异步串行**通信：
+* **串行**：数据是一位一位（Bit by Bit）按时间顺序先后在同一根信号线上发送的；
+* **异步**：发送方和接收方之间没有专门的时钟同步线（CLK），完全依赖双方约定好的**波特率（Baud Rate）**进行采样。
+
+一个标准串口数据帧（`115200, 8, N, 1`）在示波器上的微观波形如下：
+
+```
+       空闲 (高电平 3.3V)
+───────┐                                                     ┌──────── 空闲
+       │ 起始位 │ D0  │ D1  │ D2  │ D3  │ D4  │ D5  │ D6  │ D7  │ 停止位 │
+       │ (0V)   │ LSB │     │     │     │     │     │     │ MSB │ (3.3V) │
+       └────────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴────────┘
+       ▲                                                        ▲
+       │                                                        │
+    下跳沿触发采样                                          结束标志
+```
+
+#### 关键时序计算：
+* **波特率 115200 bps** 的物理含义：每秒传输 115200 个二进制位。
+* **每一位（Bit）的持续时间（$T_{\text{bit}}$）**：
+  $$T_{\text{bit}} = \frac{1}{115200\text{ s}} \approx 8.68\ \mu\text{s} \text{（微秒）}$$
+* **传输 1 个字符字节（Byte）的耗时**：
+  1 帧 = 1 起始位 + 8 数据位 + 0 校验位 + 1 停止位 = 10 位。
+  $$T_{\text{byte}} = 10 \times 8.68\ \mu\text{s} \approx 86.8\ \mu\text{s}$$
+  *这意味着单片机发送 1000 个字节的日志，纯硬件耗时约 86.8 毫秒。*
 
 ---
 
-## 1.3 完整关卡源码精析
+## 1.3 ESP32 芯片启动三步曲（从硬件复位到 `app_main`）
 
-当前关卡的完整源码位于工程根目录下的 [`main/app_main.c`](../main/app_main.c)：
+当你按下开发板上的 **RESET 按键** 或给单片机上电时，芯片内部发生了一系列精密的引导流程：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant HW as 硬件/ROM
+    participant BL as 二级 Bootloader
+    participant RTOS as FreeRTOS 内核
+    participant App as app_main (用户代码)
+
+    HW->>HW: 上电复位，读取 Strapping 管脚 (GPIO0 等)
+    HW->>BL: 从 Flash 0x1000 加载二级 Bootloader 到 IRAM
+    BL->>BL: 初始化 Flash 缓存 MMU，读取 0x8000 分区表
+    BL->>RTOS: 从 App 分区加载固件代码与数据，启动内核
+    RTOS->>RTOS: 初始化双核 CPU、时钟源、外设中断与调度器
+    RTOS->>App: 创建 main_task (优先级 1)，调用 app_main()
+    App->>App: 执行用户业务逻辑 (死循环 while(1))
+```
+
+### 阶段 1：一级引导（First-stage Bootloader / ROM Code）
+* **存储位置**：固化在 ESP32 芯片出厂时的内部只读掩膜 ROM 中（不可更改）。
+* **执行任务**：
+  1. 上电后，CPU 从复位向量地址 `0x40000400` 启动；
+  2. 读取芯片的 **Strapping 管脚**（特别是 `GPIO0`、`GPIO2`）：
+     * 若 `GPIO0` 为低电平，进入 **UART 串口下载模式**（等待电脑烧录固件）；
+     * 若 `GPIO0` 为高电平，进入 **SPI Flash 引导运行模式**；
+  3. 从外部 Flash 的起始地址 `0x1000` 处读取二级 Bootloader 并加载到内部 SRAM 中执行。
+
+### 阶段 2：二级引导（Second-stage Bootloader）
+* **存储位置**：Flash 分区偏移 `0x1000` 处（由 ESP-IDF 编译生成）。
+* **执行任务**：
+  1. 读取 Flash 偏移 `0x8000` 处的**分区表（Partition Table）**；
+  2. 寻找标记为 `app` 类型的固件分区；
+  3. 配置外部 SPI Flash 的 MMU 映射与缓存（Cache），使得 CPU 能够像访问普通内存一样直接以 XIP（原地执行）方式执行 Flash 中的代码；
+  4. 校验应用程序固件头部信息，然后跳转到应用程序入口。
+
+### 阶段 3：FreeRTOS 初始化与 `app_main` 诞生
+1. 执行 C 运行时初始化：将全局变量的初值从 Flash 复制到 SRAM 的 `.data` 段，将未初始化段 `.bss` 清零，调用全局构造函数；
+2. 初始化 PRO_CPU（核心0）和 APP_CPU（核心1）的双核对称多处理（SMP）调度环境；
+3. 初始化默认的 UART0 驱动作为标准输入输出终端（`stdin`/`stdout`）；
+4. 创建名为 **`main_task`** 的 FreeRTOS 主任务（默认优先级为 1，任务栈大小约 3.5 KB），并由该任务正式调用用户的 **`app_main()`** 函数！
+
+---
+
+## 1.4 完整源码逐行深度精析
+
+当前关卡的完整源码位于 [`main/app_main.c`](../main/app_main.c)：
 
 ```c
 /**
  * ============================================================================
  * 关卡 1：串口通信与 Hello World 打印
  * ============================================================================
- * 
- * 学习目标：
- * 1. 理解 ESP32 程序的入口函数 app_main()。
- * 2. 掌握使用 printf() 和 ESP_LOGI() 向电脑串口打印调试日志。
- * 3. 理解 FreeRTOS 的任务延时函数 vTaskDelay() 与死循环 (while(1))。
- * 4. 读取当前芯片的基础运行信息（CPU 核心、主频、剩余内存）。
- * ============================================================================
  */
 
-#include <stdio.h>
-#include <inttypes.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_log.h"
-#include "esp_system.h"
-#include "esp_chip_info.h"
-#include "esp_flash.h"
+#include <stdio.h>               // C 标准输入输出库 (提供 printf 等)
+#include <inttypes.h>            // C99 标准整型跨平台打印宏 (提供 PRIu32 等)
+#include "freertos/FreeRTOS.h"   // FreeRTOS 基础操作系统配置头文件
+#include "freertos/task.h"       // FreeRTOS 任务调度管理 API (提供 vTaskDelay 等)
+#include "esp_log.h"             // ESP-IDF 专业日志系统 (提供 ESP_LOGI 等)
+#include "esp_system.h"          // ESP 系统核心管理库 (提供 esp_get_free_heap_size 等)
+#include "esp_chip_info.h"       // 芯片基础硬件信息库 (提供 esp_chip_info 等)
+#include "esp_flash.h"           // Flash 存储操作管理库 (提供 esp_flash_get_size 等)
 
-// 1. 定义当前模块私有的日志标签 TAG，用于标识日志来源
+// 1. 定义当前模块的私有日志标签 TAG
 static const char *TAG = "LEVEL_1_HELLO";
 
 void app_main(void)
 {
-    // 2. 打印带色彩高亮的标题横幅
+    // 2. 打印带色彩高亮的启动横幅
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, "       🎉 恭喜！ESP32 关卡 1 启动成功！          ");
     ESP_LOGI(TAG, "==================================================");
 
-    // 3. 动态获取并打印当前芯片硬件参数
+    // 3. 动态获取并打印当前芯片的基础硬件参数
     esp_chip_info_t chip_info;
     uint32_t flash_size;
+    
+    // 传入结构体变量的内存地址，函数内部将硬件数据写入结构体
     esp_chip_info(&chip_info);
 
     ESP_LOGI(TAG, "【硬件信息】CPU 核心数: %d 核", chip_info.cores);
     ESP_LOGI(TAG, "【硬件信息】芯片版本 (Revision): v%d", chip_info.revision);
+    
+    // 利用位掩码 (Bitmask) 按位与判断是否具备对应硬件无线功能
     ESP_LOGI(TAG, "【硬件信息】无线特性: %s%s",
              (chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "2.4GHz Wi-Fi " : "",
              (chip_info.features & CHIP_FEATURE_BT) ? "+ 经典蓝牙/BLE" : "");
 
-    // 4. 读取 Flash 存储容量（带错误码检查）
+    // 4. 读取 Flash 存储物理容量，严格校验返回值是否等于 ESP_OK
     if (esp_flash_get_size(NULL, &flash_size) == ESP_OK) {
         ESP_LOGI(TAG, "【硬件信息】板载 Flash 大小: %" PRIu32 " MB", flash_size / (1024 * 1024));
     }
@@ -103,20 +183,20 @@ void app_main(void)
 
     int count = 0;
 
-    // 5. 嵌入式主死循环
+    // 5. 嵌入式主死循环 (Super Loop)
     while (1) {
         count++;
 
-        // 获取当前系统剩余可用堆内存 (SRAM)
+        // 获取当前系统内部 SRAM 剩余可用堆内存 (单位: 字节)
         uint32_t free_heap = esp_get_free_heap_size();
 
-        // 打印带计数和内存信息的日志
+        // 使用 ESP_LOGI 输出结构化日志
         ESP_LOGI(TAG, "[#%04d] Hello ESP32! 当前空闲内存: %" PRIu32 " 字节", count, free_heap);
 
-        // 使用标准 printf 对比输出
+        // 使用裸 printf 对比输出体验
         printf("       -> 来自 printf 的问候: 距离开机运行已过去 %d 秒\n", count);
 
-        // 延时 1000 毫秒 (1 秒)
+        // 阻塞当前任务 1000 毫秒，将 CPU 算力主动释放给系统调度器
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -124,33 +204,64 @@ void app_main(void)
 
 ---
 
-## 1.4 深度知识点全景剖析
-
-```
-知识全景地图：
-[一、头文件与组件依赖] ──► [二、C 语言语法与类型细节] ──► [三、ESP-IDF 专业日志系统]
-                                                                        │
-[六、工程设置与自测思考] ◄─── [五、FreeRTOS 调度与延时原理] ◄─── [四、系统级 API 与内存监控]
-```
+## 1.5 核心知识点全景深度剖析
 
 ---
 
-### 知识点一：头文件引用规则与 CMake 组件依赖机制
+### 知识点一：C 语言在嵌入式内存模型中的分布（Flash vs SRAM）
 
-#### 1. 为什么有的头文件用 `< >`，有的用 `" "`？
-```c
-#include <stdio.h>               // 系统/标准 C 库头文件，用尖括号 < >
-#include <inttypes.h>
-#include "freertos/FreeRTOS.h"   // 项目/组件提供的头文件，用双引号 ""
-#include "esp_log.h"
-#include "esp_chip_info.h"
-#include "esp_flash.h"
+在电脑开发中，很多初学者不在乎内存分配在哪；但在单片机中，**内存分为外部 SPI Flash（8MB，容量大但速度慢）与内部 SRAM（520KB，极速但容量珍贵）**。
+
+C 语言编译后的典型内存分段模型如下：
+
 ```
-* **`<stdio.h>` 与 `<inttypes.h>`**：属于 **C 语言标准库（Toolchain Libc）**，编译器直接从交叉编译工具链的系统内置目录中寻找。
-* **`"freertos/..."` 与 `"esp_..."`**：属于 **ESP-IDF 框架各组件（Components）** 提供的头文件。使用双引号让编译器在当前工程及所有引入的 IDF 组件目录中进行搜索。
+┌──────────────────────────────────────────────────────────────┐
+│                    Flash 外部只读存储区                      │
+├──────────────────────────────┬───────────────────────────────┤
+│  .text 段 (代码段)           │  存放所有函数编译后的机器指令 │
+├──────────────────────────────┼───────────────────────────────┤
+│  .rodata 段 (只读数据段)     │  存放 const 常量与字符串常量  │
+└──────────────────────────────┴───────────────────────────────┘
+                                ▲
+                                │ XIP (原地执行 / 高速 Cache 映射)
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    SRAM 片内运行内存区                       │
+├──────────────────────────────┬───────────────────────────────┤
+│  .data 段 (已初始化数据段)   │  存放有初始值的全局/静态变量  │
+├──────────────────────────────┼───────────────────────────────┤
+│  .bss 段 (未初始化数据段)    │  存放未初始化的全局/静态变量  │
+├──────────────────────────────┼───────────────────────────────┤
+│  Heap (堆内存区)             │  malloc / 动态内存申请区      │
+├──────────────────────────────┼───────────────────────────────┤
+│  Stack (栈内存区)            │  局部变量 / 函数调用上下文    │
+└──────────────────────────────┴───────────────────────────────┘
+```
 
-#### 2. 为什么在 `main/CMakeLists.txt` 里必须显式声明 `REQUIRES`？
-我们在初次编译时曾遇到报错：`fatal error: esp_flash.h: No such file or directory`。在 `main/CMakeLists.txt` 中添加 `spi_flash` 后解决：
+#### 为什么写 `static const char *TAG = "LEVEL_1_HELLO";`？
+1. **`const` 的内存收益**：
+   * 如果不加 `const`，编译器会认为这是一个可修改的字符数组，会在单片机启动时把字符串拷贝进 **SRAM**，白白消耗珍贵的片上内存；
+   * 加上 `const` 后，编译器明确知道该内容永不修改，将其直接保存在 Flash 的 **`.rodata` 段** 中，**零占用 SRAM 内存**！
+2. **`static` 的作用域保护**：
+   * 在 C 语言中，没有加 `static` 的全局变量默认拥有“外部链接属性（External Linkage）”；
+   * 如果你在 `app_main.c` 中定义了 `TAG`，而未来在 `sensor.c` 中也定义了 `TAG`，链接器在合并生成最终固件时会直接报错：`multiple definition of 'TAG'`；
+   * 加上 `static` 限制了符号只在当前源文件可见，实现了代码模块的封装隔离。
+
+---
+
+### 知识点二：CMake 构建系统与 ESP-IDF 组件模型
+
+ESP-IDF 抛弃了传统单片机古老的 Makefile，全面拥抱现代 CMake 体系。
+
+```
+项目根目录/
+├── CMakeLists.txt              <-- [项目级构建入口] 声明 project()
+└── main/
+    ├── CMakeLists.txt          <-- [组件级注册脚本] idf_component_register()
+    └── app_main.c              <-- 源码
+```
+
+#### `main/CMakeLists.txt` 的解析机制：
 ```cmake
 idf_component_register(
     SRCS "app_main.c"
@@ -158,113 +269,74 @@ idf_component_register(
     REQUIRES driver esp_timer esp_psram spi_flash
 )
 ```
-* **ESP-IDF 的“积木式”组件架构**：
-  ESP-IDF 由数十个高度解耦的独立组件（Wi-Fi、蓝牙、文件系统、驱动库等）构成。为了大幅加快编译速度并保证最终生成的固件（`.bin`）体积尽可能小，**哪个模块需要用到其他组件的头文件和功能，就必须在 `REQUIRES`（或 `PRIV_REQUIRES`）后面显式声明依赖**。
-  * 用到 GPIO 控制（`gpio_...`） $\rightarrow$ 声明 `driver`
-  * 用到硬件定时器（`esp_timer_...`） $\rightarrow$ 声明 `esp_timer`
-  * 用到 PSRAM 内存管理 $\rightarrow$ 声明 `esp_psram`
-  * 用到 Flash 存储读取（`esp_flash_...`） $\rightarrow$ 声明 `spi_flash`
+* **`SRCS`**：指定该组件参与编译的源文件列表。
+* **`INCLUDE_DIRS`**：指定头文件的公开搜索路径（`.` 表示当前目录）。
+* **`REQUIRES` vs `PRIV_REQUIRES`（依赖声明）**：
+  * **`REQUIRES`（公共依赖）**：当前组件对外公开的头文件（`.h`）中如果包含了其他组件的头文件，必须使用 `REQUIRES`，这样依赖当前组件的上层模块也能自动获得该依赖；
+  * **`PRIV_REQUIRES`（私有依赖）**：仅在当前组件的源文件（`.c`）内部使用的头文件，可以使用 `PRIV_REQUIRES`。
+  * *我们在第一关中使用了 `#include "esp_flash.h"`，因此必须声明依赖 `spi_flash` 组件，否则构建系统不会传递该组件的头文件包含路径与链接库。*
 
 ---
 
-### 知识点二：关键 C 语言语法与类型细节
+### 知识点三：ESP-IDF 专业日志系统底层机制
 
-#### 1. `static const char *TAG = "LEVEL_1_HELLO";`
-* **`const`（常量修饰符）**：
-  表明 `TAG` 指向的字符串内容是绝对只读的。编译器会把这个字符串存放在 Flash 存储器的**只读数据段（`.rodata` 段）**，而不会占用单片机极其宝贵的内部 RAM（SRAM）运行内存。
-* **`static`（静态局部/文件作用域限定符）**：
-  限定 `TAG` 变量的可见范围**仅限于当前 `app_main.c` 文件内部**。如果工程中其他 `.c` 文件（如 `wifi.c` 或 `sensor.c`）也定义了同名的 `TAG`，两者在链接时不会发生“符号重复定义（Multiple Definition）”的冲突。
-* **TAG 的核心作用**：在串口日志的最前面作为模块标签，让你在海量日志中一眼辨别出该行日志来自于哪一个业务模块。
+#### 1. 五级日志架构与色彩控制（ANSI Escape Codes）
+终端里的彩色文字并不是神秘魔法，而是利用了 **ANSI 终端转义序列**。当 ESP-IDF 输出 `\033[0;32m` 时，串口终端识别到该控制字符就会将后续文字渲染为绿色，输出 `\033[0m` 则重置为默认颜色。
 
-#### 2. `void app_main(void)` 与桌面开发 `int main()` 的区别
-* **桌面程序（Windows/Linux）**：由操作系统的进程调度器启动。程序执行完毕后调用 `return 0;` 将退出状态码返回给操作系统，随后进程被操作系统回收销毁。
-* **单片机程序（ESP-IDF）**：
-  * 板子上没有传统意义上的上层操作系统进程管理器来接收退出码，因此返回值是 **`void`**。
-  * 芯片上电后，硬件 ROM 中的一级引导程序（First-stage Bootloader）会加载 Flash 中的二级 Bootloader，随后初始化 CPU 运行环境与 FreeRTOS 调度器，并自动创建一个 FreeRTOS 主任务来调用 `app_main()` 作为用户逻辑的起点。
+| 宏名称 | 日志级别 | 默认颜色 | 内部 ANSI 编码 | 适用场景 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`ESP_LOGE`** | Error (错误) | 🔴 红色 | `\033[0;31m` | 致命异常、外设初始化失败、内存耗尽 |
+| **`ESP_LOGW`** | Warn (警告) | 🟡 黄色 | `\033[0;33m` | 可恢复异常、通信重试、参数超限 |
+| **`ESP_LOGI`** | Info (信息) | 🟢 绿色 | `\033[0;32m` | 业务关键状态切换、版本展示、开机成功 |
+| **`ESP_LOGD`** | Debug (调试) | ⚪ 白色 | `\033[0;37m` | 协议数据包细节、算法中间计算过程 |
+| **`ESP_LOGV`** | Verbose (冗余) | 🔘 灰色 | `\033[0;38m` | 最底层硬件寄存器读写流水（海量数据） |
 
-#### 3. 跨平台格式化输出占位符：`%" PRIu32 "` 的奥秘
-在代码中打印 Flash 容量和空闲内存时，我们写成了：
-```c
-ESP_LOGI(TAG, "板载 Flash 大小: %" PRIu32 " MB", flash_size / (1024 * 1024));
-```
-* **为什么不直接写 `%d` 或 `%u`？**
-  * 在不同的硬件架构（8位 AVR、16位 MSP430、32位 ARM/Xtensa、64位 x86_64）上，C 语言基础类型 `int`、`long` 占用的字节数可能完全不同。
-  * `uint32_t` 严格表示“无符号 32 位整型（固定占用 4 字节）”。
-  * 为了在不同编译器和平台之间实现无警告格式化输出，C99 标准在 `<inttypes.h>` 中引入了 `PRIu32` 宏（**PR**int **I**nt **u**nsigned **32**-bit）。
-  * 预处理器在编译前会自动将其替换为当前平台最准确的占位符（例如在 32 位平台上替换为 `"u"`，在某些平台上替换为 `"lu"`），利用 C 语言的**字符串字面量自动拼接特性**（`"大小: %" "u" " MB"` 拼接为 `"大小: %u MB"`），保证了代码在任何架构下的严谨性与兼容性。
+#### 2. 编译期零成本裁剪（Zero-Cost Filtering）
+在产品发布（Release）固件中，如果不需要 Debug 或 Verbose 日志，可以在 `menuconfig` 中将全局日志级别设置为 `Info`。
+此时所有 `ESP_LOGD` 和 `ESP_LOGV` 宏在预编译阶段会被**直接替换为空指令**：
+* 既不产生任何汇编代码；
+* 也不占用任何 Flash 存储和字符串空间；
+* 运行速度达到极致，零性能损耗。
+
+#### 3. 为什么多任务同时打印不会乱字？（线程安全）
+如果在多个不同的 FreeRTOS 任务中同时调用 `printf`，字符可能会交织在一起（例如 `HeHelloll`）。
+而 `ESP_LOG` 宏在底层实现中使用了 **互斥锁（Mutex）**，确保一条日志在输出完毕前，其他任务的打印请求必须排队等待，保证了日志的原子性与整洁性。
 
 ---
 
-### 知识点三：ESP-IDF 专业日志系统（ESP_LOG 系列宏）
+### 知识点四：系统 API 深入与位运算特性检测
 
-在正式的嵌入式工业开发中，**必须使用 `ESP_LOG` 宏替代裸 `printf`**。
-
-#### 1. 五个日志级别对照表（按严重程度从高到低）
-| 宏名称 | 级别英文 | 终端输出颜色 | 适用场景说明 |
-| :--- | :--- | :--- | :--- |
-| **`ESP_LOGE`** | **Error** (错误) | **🔴 红色** | 严重致命故障（如外设初始化失败、内存耗尽、传感器无应答） |
-| **`ESP_LOGW`** | **Warn** (警告) | **🟡 黄色** | 异常情况但系统可容错继续（如通信超时正在重试、电压偏低） |
-| **`ESP_LOGI`** | **Info** (信息) | **🟢 绿色** | 业务主流程状态打印（如开机成功、Wi-Fi连接成功、版本号展示） |
-| **`ESP_LOGD`** | **Debug** (调试) | **⚪ 白色/普通** | 详细调试信息（如算法中间变量计算值、状态机流转） |
-| **`ESP_LOGV`** | **Verbose** (冗余) | **🔘 灰色** | 最底层海量流水日志（如发送/接收到的每一个原始数据字节） |
-
-#### 2. 解剖一行标准的 ESP-IDF 日志
-```text
-I (1360) LEVEL_1_HELLO: [#0001] Hello ESP32! 当前空闲内存: 298412 字节
-│   │          │          └─ 实际打印的消息正文内容
-│   │          └─ 模块私有标签 (TAG)
-│   └─ 系统从开机/复位至今的运行时间戳 (单位: 毫秒 ms)
-└─ 单字符日志级别标识 (I = Info, E = Error, W = Warn...)
+#### 1. 结构体与指针传参（Pass by Reference）
+```c
+esp_chip_info_t chip_info;
+esp_chip_info(&chip_info);
 ```
+* 在 C 语言中，普通的形参传递是**值传递（复制一份内存）**。若函数想要修改调用者定义的变量，必须传入该变量的**内存物理地址（`&chip_info`）**。
+* `esp_chip_info()` 内部声明为 `void esp_chip_info(esp_chip_info_t *out_info)`，通过解引用指针 `out_info->cores = 2` 将硬件寄存器探测出的数据直接写入外部变量。
 
-#### 3. 日志系统的进阶特性
-* **全局级别过滤**：在 `sdkconfig` 中可以设置默认日志级别（例如在 Release 生产固件中设置为 `Info` 级别，则代码中的所有 `ESP_LOGD` 和 `ESP_LOGV` 在编译时会被完全剔除，不占用 Flash 空间和串口带宽）。
-* **动态模块过滤**：可以在代码中调用 `esp_log_level_set("LEVEL_1_HELLO", ESP_LOG_WARN)` 动态单独提高或降低某一个模块的输出级别。
+#### 2. 位运算与特性掩码（Bitmask Operations）
+在 `esp_chip_info_t` 中，芯片的功能特性被压缩在一个 32 位的整型 `features` 字段中：
+```c
+#define CHIP_FEATURE_WIFI_BGN (1 << 0)  // 第0位为1: 00000000000000000000000000000001
+#define CHIP_FEATURE_BLE      (1 << 1)  // 第1位为1: 00000000000000000000000000000010
+#define CHIP_FEATURE_BT       (1 << 4)  // 第4位为1: 00000000000000000000000100000000
+```
+* **按位与检测原理**：
+  ```text
+    features:            00000000 00000000 00000001 00000001  (支持Wi-Fi和经典BT)
+  & CHIP_FEATURE_WIFI:   00000000 00000000 00000000 00000001
+  -------------------------------------------------------------
+    结果:                00000000 00000000 00000000 00000001  (非零，条件为真！)
+  ```
+  *这种位掩码设计在操作系统和硬件驱动开发中无处不在，是高效节省内存的典范。*
+
+#### 3. 堆内存监控与内存泄漏（Memory Leak）
+* 单片机没有操作系统的“虚拟内存扩展”和“页面置换机制”。内部 SRAM 一旦被分配耗尽，后续的 `malloc()` 会直接返回 `NULL`。
+* 在主循环中每秒输出 `esp_get_free_heap_size()`，如果发现该数值随着时间单调递减，说明程序中存在**申请了内存但未调用 `free()` 释放的内存泄漏 Bug**。
 
 ---
 
-### 知识点四：系统级 API、指针与内存监控
-
-#### 1. 结构体传参为什么必须加取地址符 `&`？（指针初探）
-```c
-esp_chip_info_t chip_info;        // 1. 在栈上定义一个结构体变量
-esp_chip_info(&chip_info);        // 2. 将变量的内存地址（&）传给函数
-```
-* `esp_chip_info_t` 是一个结构体，内部封装了 CPU 核心数、主频、芯片版本等多个属性。
-* C 语言的函数调用默认是**“值传递（Pass by Value）”**，即传入的是变量的一份副本。如果直接传 `chip_info`，函数内部修改的只是副本，外部无法拿到结果。
-* 通过传入 `&chip_info`（内存地址），`esp_chip_info()` 函数内部就能通过指针直接把硬件探测到的数据**写入到我们定义的这一块内存空间中**。
-
-#### 2. 位掩码（Bitmask）与特性检测：`(features & CHIP_FEATURE_WIFI_BGN)`
-```c
-(chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "2.4GHz Wi-Fi " : ""
-```
-* **为什么用位运算？**
-  芯片支持的特性非常多（Wi-Fi、BLE、经典蓝牙、IEEE 802.15.4 等）。如果每个特性都用一个独立的 `bool` 变量表示，会浪费很多字节。
-* 乐鑫将所有特性压缩到一个 32 位的整型变量 `features` 的不同二进制位（Bit）中：
-  * 第 0 位 (bit 0)：`1` 代表支持 2.4G Wi-Fi (`CHIP_FEATURE_WIFI_BGN`)
-  * 第 1 位 (bit 1)：`1` 代表支持低功耗蓝牙 BLE (`CHIP_FEATURE_BLE`)
-  * 第 4 位 (bit 4)：`1` 代表支持经典蓝牙 (`CHIP_FEATURE_BT`)
-* 使用 **按位与运算符 `&`**，只有当对应二进制位为 `1` 时结果才非零，从而极快地完成硬件特性检测。
-
-#### 3. ESP-IDF 工业级错误处理机制：`esp_err_t` 与 `ESP_OK`
-```c
-if (esp_flash_get_size(NULL, &flash_size) == ESP_OK) {
-    // 成功获取到 Flash 大小
-}
-```
-* ESP-IDF 中超过 95% 的底层驱动函数都会返回一个统一的错误码类型 `esp_err_t`。
-* **`ESP_OK`（宏定义为 `0`）** 代表操作成功执行；若返回值不为 0（如 `ESP_ERR_INVALID_ARG` 参数无效、`ESP_ERR_NO_MEM` 内存不足、`ESP_FAIL` 失败等），代表发生了异常。
-* **开发黄金准则**：在工业级嵌入式代码中，**对关键函数的返回值检查是否等于 `ESP_OK` 是杜绝系统暗病的最重要习惯**。
-
-#### 4. 系统堆内存（Heap）健康监控：`esp_get_free_heap_size()`
-* **什么是堆内存（Heap）？**
-  ESP32 片上集成了 520 KB SRAM。除去操作系统自身占用的内存外，剩下的动态可用内存称为“堆内存（Heap）”。所有通过 `malloc()`、FreeRTOS 任务创建、队列以及 Wi-Fi 通信缓冲申请的内存都来自这里。
-* **为什么要监控它？**
-  单片机没有虚拟内存或硬盘交换区（Swap），一旦发生**内存泄漏（Memory Leak，申请了但忘记释放）**，剩余的 Heap 空间会逐步减少至 0，导致系统直接崩溃死机（Panic）。在主循环中定期打印空闲内存，能让你随时洞察系统的“健康体征”。
-
----
-
-### 知识点五：FreeRTOS 任务调度与延时原理
+### 知识点五：FreeRTOS 多任务内核调度与延时机制
 
 ```c
 while (1) {
@@ -273,48 +345,56 @@ while (1) {
 }
 ```
 
-#### 1. 为什么单片机必须在 `while (1)` 死循环中运行？
-* 单片机作为专用嵌入式设备，从通电上电那一刻起就需要 7×24 小时不间断运行。
-* 如果 `app_main` 执行到底退出了，FreeRTOS 的底层启动机制会把这个主任务自动从调度队列中删除销毁。
+#### 1. 为什么绝对禁止使用 `for (int i=0; i<1000000; i++);` 空循环？
+在传统单片机裸机开发中，很多人习惯用空循环延时。在 ESP32 + FreeRTOS 架构下这是**极其严重的禁忌**：
+1. **能耗与发热**：CPU 双核以 240MHz 的满血频率狂飙执行无效跳转指令，功耗飙升至 100mA 以上，芯片急剧发热；
+2. **多任务饥饿（Task Starvation）**：ESP32 是双核多任务系统，后台需要实时处理 Wi-Fi 协议栈、蓝牙射频、TCP/IP 数据收发。空循环独占 CPU 核心，导致后台高优先级任务被活活“饿死”；
+3. **触发看门狗复位（Watchdog Timer Reset）**：
+   * ESP-IDF 默认启用了 **任务看门狗（Task WDT，默认超时阈值为 300ms ~ 800ms）**；
+   * 如果看门狗发现当前 CPU 核心运行的任务连续几百毫秒没有产生任务调度，也没有喂狗（Feed Watchdog），看门狗会判定系统死锁崩溃，**直接强制拉低硬件复位引脚使单片机重启（Panic: Task watchdog got triggered）**！
 
-#### 2. 为什么绝对禁止使用 `for (int i=0; i<1000000; i++);` 空循环延时？
-初学者在没有操作系统概念时常写空循环死等，但在 ESP-IDF + FreeRTOS 架构下这是**极其严重的错误**：
-1. **CPU 霸占与能耗飙升**：在空循环期间，CPU 双核以 240MHz 的全速拼命执行无意义指令，芯片剧烈发热、功耗达到峰值。
-2. **阻止后台任务调度**：ESP32 是双核多任务系统，后台运行着 Wi-Fi 协议栈、蓝牙协议栈、TCP/IP 数据包处理等重要系统任务。空循环会霸占 CPU，导致后台任务饿死。
-3. **触发看门狗复位（Watchdog Timer Reset）**：ESP32 的看门狗定时器若监测到某个任务持续占用 CPU 超过预设时间（如 300ms~800ms）且没有产生任务调度，会判定系统死锁，**强制将芯片进行硬件复位重启（Guru Meditation Error / Task Watchdog Triggered）**。
+#### 2. `vTaskDelay()` 的底层状态机流转
+```mermaid
+stateDiagram-v2
+    [*] --> Running : CPU 执行当前任务代码
+    Running --> Blocked : 调用 vTaskDelay(pdMS_TO_TICKS(1000))
+    note right of Blocked : 任务进入休眠挂起队列\nCPU 让出给其他任务或 IDLE 空闲任务
+    Blocked --> Ready : 1000ms 定时器到期 (100 Ticks)
+    note right of Ready : 任务移入就绪就绪队列\n等待调度器分配 CPU 核心
+    Ready --> Running : 调度器选中，恢复执行
+```
+* **主动让出 CPU**：调用 `vTaskDelay()` 后，任务立即被移出就绪链表，进入阻塞休眠链表，CPU 核心自动切换去执行其他就绪任务或系统的**空闲任务（IDLE Task）**。在空闲任务中，CPU 可以进入动态休眠降低功耗。
 
-#### 3. `vTaskDelay()` 与 `pdMS_TO_TICKS()` 的底层运行机制
-* **`vTaskDelay()` 是“主动休眠让出 CPU”**：
-  当调用 `vTaskDelay` 时，FreeRTOS 会把当前主任务的状态标记为 **Blocked（阻塞休眠）**，并**主动将 CPU 核心的使用权让给其他就绪任务或系统的空闲任务（IDLE Task）**，CPU 在空闲任务中甚至可以进入轻度睡眠降功耗。
-* **什么是系统节拍（Tick）？**
-  * FreeRTOS 的内核依靠硬件定时器产生固定频率的时钟中断，像心脏起搏一样滴答跳动，每一次中断跳动称为一个 **Tick**。
-  * 在 ESP-IDF 的默认配置（`CONFIG_FREERTOS_HZ`）中，系统节拍频率是 **100 Hz**，即：
-    $$\text{1 个 Tick 的时间周期} = \frac{1000\text{ ms}}{100} = 10\text{ ms}$$
-* **`pdMS_TO_TICKS(1000)` 的换算公式**：
-  $$\text{目标节拍数 (Ticks)} = \frac{\text{目标毫秒数 (ms)}}{\text{每个 Tick 的毫秒数}} = \frac{1000\text{ ms}}{10\text{ ms/tick}} = 100\text{ Ticks}$$
-  这个宏负责把人类直观的“毫秒”精准换算成 FreeRTOS 内部识别的“节拍数”。
+#### 3. 系统节拍 Tick 与换算公式
+* FreeRTOS 的时间计量单位是 **Tick（节拍）**。硬件定时器每隔固定周期产生一次时钟中断（SysTick Interrupt），驱动内核节拍计数器递增。
+* 在当前工程的配置中，系统时钟节拍频率为 `CONFIG_FREERTOS_HZ = 100`（即每秒 100 次时钟中断）：
+  $$\text{1 个 Tick 的物理时间} = \frac{1\text{ 秒}}{100} = 10\text{ 毫秒 (ms)}$$
+* **`pdMS_TO_TICKS()` 宏的计算展开**：
+  $$\text{目标 Ticks} = \frac{\text{目标时间 (ms)} \times \text{CONFIG\_FREERTOS\_HZ}}{1000} = \frac{1000 \times 100}{1000} = 100\text{ Ticks}$$
 
 ---
 
-## 1.5 实验排错与常见问题排查（FAQ）
+## 1.6 实验排错与高频故障定位手册（Troubleshooting）
 
-| 故障现象 | 潜在原因分析 | 标准解决方案 |
+| 故障现象 | 底层根因分析 | 标准排查步骤与解决方案 |
 | :--- | :--- | :--- |
-| **电脑设备管理器中完全看不到 COM 端口** | 1. 使用了仅用于充电的 2 芯 USB 线；<br>2. 电脑未安装 WCH CH340 USB 驱动。 | 1. 更换为能够传输数据的标准 Type-C 数据线；<br>2. 重新下载并安装官方 CH340 驱动程序。 |
-| **烧录提示 `Timed out waiting for packet header`** | 自动下载电路受板载电容充放电影响未能自动拉低 GPIO0。 | 按住板载 **BOOT (SW2)** 键不放，短按一次 **RESET (SW1)** 键使芯片强制进入下载模式，再点击烧录。 |
-| **打开串口监视器后全是乱码字符（如 ``）** | 终端波特率与代码中的波特率不匹配。 | 检查 VS Code 或串口助手的波特率设置，确认是否为标准的 **115200**。 |
-| **板子运行几秒后突然打印一堆红色英文并自动重启** | 在死循环中使用了空循环死等或耗时阻塞操作，没有调用 `vTaskDelay`。 | 检查死循环体内是否包含了 `vTaskDelay(pdMS_TO_TICKS(...))` 释放 CPU。 |
+| **电脑设备管理器无任何 COM 端口显示** | 1. 使用了不带数据传输能力的“纯充电线”；<br>2. 电脑缺少 WCH CH340 虚拟串口驱动。 | 1. 换用随手机附带的标准 4 芯/全功能 Type-C 数据线；<br>2. 重新安装官方 CH340 驱动，插拔确认设备管理器出现 `COMx`。 |
+| **烧录时反复提示 `A fatal error occurred: Failed to connect to ESP32: Timed out`** | 自动下载电路的三极管未能在复位瞬间成功将 GPIO0 拉低至低电平。 | 硬件手动进入 Bootloader 模式：按住板载 **BOOT 键（SW2）** 不放，轻按一次 **RESET 键（SW1）** 松开，再松开 BOOT 键，然后点击烧录。 |
+| **串口监视器输出内容全部为乱码（如 `▒▒`）** | 终端波特率与 ESP32 UART0 硬件寄存器波特率设置不一致。 | 确保 VS Code 底部状态栏或串口监视器波特率统一设置为 **`115200`**。 |
+| **程序运行几秒后突然报错 `Task watchdog got triggered on CPU 0` 并重启** | 代码在 `while(1)` 中执行了耗时计算或死循环，未调用 `vTaskDelay`。 | 检查所有死循环和长任务逻辑，确保周期性调用 `vTaskDelay(pdMS_TO_TICKS(10))` 释放 CPU 调度权。 |
 
 ---
 
-## 1.6 课后动手实验与自测思考
+## 1.7 课后动手实验与挑战思考题
 
-为了巩固本章所学，建议读者在开发板上亲自动手完成以下 3 个小实验：
+为帮助读者深度内化本章所学，请完成以下进阶动手实验：
 
-1. **实验 A（修改日志级别）**：
-   将代码中的 `ESP_LOGI` 分别修改为 `ESP_LOGW` 和 `ESP_LOGE`，重新编译烧录，观察终端串口监视器输出文字颜色的变化（黄色与红色）。
-2. **实验 B（调整系统心跳频率）**：
-   将延时函数修改为 `vTaskDelay(pdMS_TO_TICKS(200))`（即每 200 毫秒打印一次），重新烧录，观察串口打印的刷新速度与开机计时器的变化。
-3. **自测思考题**：
-   * **问题 1**：为什么我们在 `static const char *TAG = "LEVEL_1_HELLO";` 前面要同时加上 `static` 和 `const`？它们分别保护了什么？
-   * **问题 2**：如果一个 FreeRTOS 任务需要永久挂起等待某个特定事件唤醒（不再周期性执行但也不能被销毁），给 `vTaskDelay()` 传入什么参数最标准？*(提示：`portMAX_DELAY`)*
+### 🎯 动手实验 1：炫彩 ASCII Art 终端问候语
+* **实验任务**：利用 ANSI Escape Code 转义字符，修改 `app_main()`，在开机时打印一段带有不同颜色渐变（红、绿、黄、蓝、紫、青）的大型字符艺术字（ASCII Art），并观察在串口监视器中的炫彩视觉呈现。
+
+### 🎯 动手实验 2：多任务双核并行打印
+* **实验任务**：使用 FreeRTOS 的 `xTaskCreatePinnedToCore()` 创建一个新任务，分别让 `app_main` 运行在 Core 0，新任务运行在 Core 1，两个任务以不同的延时周期（如 500ms 和 1200ms）向串口打印日志，观察双核独立并发运行的时序交错现象。
+
+### 🧠 进阶思考题
+1. **思考题 A**：如果我们在 `app_main` 中调用了 `malloc(1024 * 1024)` 尝试申请 1MB 内存，为什么片上 SRAM 会申请失败？应该使用什么函数才能申请到板载的 2MB PSRAM 扩展内存？*(提示：`heap_caps_malloc`)*
+2. **思考题 B**：如果把 FreeRTOS 的 `CONFIG_FREERTOS_HZ` 从 100 改为 1000，`pdMS_TO_TICKS(10)` 的计算结果会发生什么改变？系统的定时精度与 CPU 调度开销会产生怎样的权衡（Trade-off）？
