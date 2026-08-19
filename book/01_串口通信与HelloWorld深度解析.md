@@ -229,6 +229,45 @@ if (esp_flash_get_size(NULL, &flash_size) == ESP_OK) {
 
 ---
 
+### 4. 🚦 日志等级控制与过滤实战（怎样只输出特定等级的日志？）
+
+在实际开发中，日志打印太多会刷屏，我们经常需要控制“只打印重要的报错，忽略碎碎念的普通信息”。
+
+#### ① 5 个日志等级的金字塔包含关系
+ESP-IDF 的日志级别像一个金字塔：**当你设置了某个级别，系统会输出该级别及以上更严重的日志，低于该级别的自动静音**：
+
+```
+严重程度 (高 -> 低)
+  ▲  1. ESP_LOG_ERROR   (🔴 只输出 ESP_LOGE 严重错误)
+  │  2. ESP_LOG_WARN    (🟡 输出 ESP_LOGE + ESP_LOGW 警告)
+  │  3. ESP_LOG_INFO    (🟢 输出 Error + Warn + ESP_LOGI 默认级别)
+  │  4. ESP_LOG_DEBUG   (⚪ 输出 Error + Warn + Info + ESP_LOGD 调试)
+  ▼  5. ESP_LOG_VERBOSE (🔘 输出所有日志，包含最底层的 ESP_LOGV)
+```
+
+#### ② 方法一：在代码中动态控制（推荐 · 最灵活）
+使用函数 **`esp_log_level_set()`**：
+
+* **全局控制（所有模块一起静音/过滤）**：
+  ```c
+  // 将系统所有模块限制为：只打印警告(WARN)和错误(ERROR)，忽略普通信息(INFO)
+  esp_log_level_set("*", ESP_LOG_WARN);
+  ```
+* **精准控制（只控制某一个指定 TAG 的模块）**：
+  ```c
+  // 整个系统保持安静（只输出 ERROR）
+  esp_log_level_set("*", ESP_LOG_ERROR);
+  // 单独允许我当前关卡的模块打印详细信息 (INFO)
+  esp_log_level_set("LEVEL_1_HELLO", ESP_LOG_INFO);
+  ```
+
+#### ③ 方法二：在工程配置（menuconfig）中全局设置（发布产品时使用）
+* 在 VS Code 底部点击 **⚙️ 齿轮图标（ESP-IDF SDK Configuration Editor）**；
+* 搜索 `Default log verbosity`，选择 `Warning` 或 `Error`；
+* **好处**：被过滤掉的低等级日志在编译时会被**彻底剔除**，不占用单片机 Flash 存储，执行效率最高。
+
+---
+
 ## 1.5 动手小实验（新手即时正反馈）
 
 学习编程最快的方法就是**亲手改改代码，看看会发生什么**！
