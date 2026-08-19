@@ -1,6 +1,6 @@
 # ESP32 Starter Journey 🚀
 
-![ESP32 Starter Journey Cover](./docs/images/esp32_x_post_cover.jpg)
+![ESP32 物联网实战闯关之路](./docs/images/esp32_levels_poster.jpg)
 
 > 基于 **ESP-IDF v6.0** 与 **ESP32-WROOM-32E (8MB Flash + 2MB PSRAM)** 的嵌入式物联网从零进阶实战项目。  
 > 集成 1.69 英寸 ST7789 触摸彩屏、LVGL v9 GUI、常用传感器驱动及完整原理图资料。
