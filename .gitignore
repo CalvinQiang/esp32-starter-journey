@@ -15,3 +15,5 @@ __pycache__/
 *.zip
 *.7z
 .workbuddy/
+.vscode
+archive
