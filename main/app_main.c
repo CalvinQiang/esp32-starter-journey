@@ -1,13 +1,13 @@
 /**
  * ============================================================================
- * 第 03 关：ESP32 按键输入检测与人体红外感应（感知现实世界的输入）
+ * 第 04 关：ESP32 GPIO 外部中断(ISR)与按键事件驱动
  * ============================================================================
  * 
  * 学习目标：
- * 1. 理解数字输入（GPIO Input）原理与高低电平判定机制。
- * 2. 掌握用户按键 SW3 (GPIO39) 的电平读取、机械抖动成因与 20ms 软件消抖法。
- * 3. 掌握 SR602 人体红外传感器 (GPIO34) 的电平监测与智能夜灯逻辑。
- * 4. 熟记 ESP32 纯输入管脚（GPIO34/35/36/39）的硬件约束与使用规范。
+ * 1. 告别 while(1) 轮询死等，掌握单片机核心机制 —— 硬件外部中断（Interrupt）。
+ * 2. 学习中断服务函数（ISR）编写规范与 IRAM_ATTR 内存修饰符的作用。
+ * 3. 掌握下降沿中断触发（NEGEDGE）与极低延迟的硬件事件驱动。
+ * 4. 深刻理解中断上下文与任务上下文的区别，树立中断安全编程意识。
  * ============================================================================
  */
 
@@ -16,93 +16,98 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
-static const char *TAG = "LEVEL_3_INPUT";
+static const char *TAG = "LEVEL_4_INTR";
 
-// 引脚定义速查
-#define LED_PIN         GPIO_NUM_27  // 板载受控指示灯 LED2 (输出)
-#define BUTTON_PIN      GPIO_NUM_39  // 用户按键 SW3 (输入专用，按下为 0，松开为 1)
-#define PIR_PIN         GPIO_NUM_34  // SR602 人体红外探头 (输入专用，有人为 1，无人为 0)
+// 引脚定义
+#define LED_PIN         GPIO_NUM_27  // 板载受控蓝色 LED2 (输出)
+#define BUTTON_PIN      GPIO_NUM_39  // 用户按键 SW3 (输入专用，平时 1，按下 0)
 
-// 全局状态记录
-static bool g_led_state = false; // 当前灯的亮灭状态 (false: 灭, true: 亮)
+// 全局变量：记录中断触发次数与灯光状态（声明为 volatile 防止编译器过度优化）
+static volatile uint32_t g_intr_count = 0;
+static volatile bool g_led_state = false;
+static volatile int64_t g_last_intr_time = 0; // 上次中断时间戳 (微秒)
 
 /**
- * @brief 初始化所有 GPIO 引脚
+ * @brief GPIO 硬件中断服务函数 (ISR: Interrupt Service Routine)
+ * 
+ * ⚠️ 极其重要的嵌入式编程规则：
+ * 1. 必须使用 IRAM_ATTR 修饰：保证函数代码常驻内部高速 RAM，即使 Flash 正在擦写也能瞬间响应！
+ * 2. 保持极致精简（快进快出）：禁止调用 vTaskDelay()、禁止使用复杂的浮点计算或大量 printf。
  */
-static void init_system_gpios(void)
+static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
-    // 1. 初始化输出引脚：LED2 (GPIO27)
+    // 获取当前微秒级硬件时间戳 (esp_timer_get_time 是 ISR 安全的)
+    int64_t now = esp_timer_get_time();
+
+    // 硬件简易软件消抖：如果两次中断间隔小于 150 毫秒 (150,000 微秒)，判定为按键物理弹跳，直接忽略
+    if (now - g_last_intr_time > 150000) {
+        g_intr_count++;
+        g_led_state = !g_led_state;
+        
+        // 瞬间硬件翻转 LED2 电平 (微秒级超快响应！)
+        gpio_set_level(LED_PIN, g_led_state ? 1 : 0);
+        
+        g_last_intr_time = now;
+    }
+}
+
+/**
+ * @brief 初始化系统 GPIO 与硬件中断
+ */
+static void init_system_interrupt(void)
+{
+    // 1. 初始化 LED2 为输出，并赋安全初始值 0 (熄灭)
     gpio_reset_pin(LED_PIN);
     gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(LED_PIN, 0); // 默认初始状态熄灭
+    gpio_set_level(LED_PIN, 0);
 
-    // 2. 初始化输入引脚：用户按键 SW3 (GPIO39)
-    // ⚠️ 注意：GPIO39 为纯输入管脚，不支持软件内部上拉/下拉，硬件外部已带有上拉电阻
-    gpio_reset_pin(BUTTON_PIN);
-    gpio_set_direction(BUTTON_PIN, GPIO_MODE_INPUT);
+    // 2. 配置 SW3 按键 (GPIO39) 为下降沿中断触发
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << BUTTON_PIN),       // 目标引脚 GPIO39
+        .mode = GPIO_MODE_INPUT,                    // 输入模式
+        .pull_up_en = GPIO_PULLUP_DISABLE,          // GPIO39 内部无上拉，依靠板载硬件 10k 电阻
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE              // 下降沿触发：由 3.3V 变为 0V (按下的瞬间)
+    };
+    gpio_config(&io_conf);
 
-    // 3. 初始化输入引脚：SR602 人体红外探头 (GPIO34)
-    // ⚠️ 注意：GPIO34 同样为纯输入管脚
-    gpio_reset_pin(PIR_PIN);
-    gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
+    // 3. 安装全局 GPIO 中断服务 (参数 0 表示默认中断分配优先级)
+    gpio_install_isr_service(0);
 
-    ESP_LOGI(TAG, "GPIO 初始化完成: LED2 (输出), SW3按键 (输入), SR602红外 (输入)");
+    // 4. 为特定引脚绑定专属中断处理回调函数
+    gpio_isr_handler_add(BUTTON_PIN, gpio_isr_handler, (void*) BUTTON_PIN);
+
+    ESP_LOGI(TAG, "✅ 硬件中断初始化完成：SW3 (GPIO39) 下降沿中断已挂载！");
 }
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "==================================================");
-    ESP_LOGI(TAG, "   🎉 关卡 3 启动：按键输入与人体红外感知教学     ");
+    ESP_LOGI(TAG, "   ⚡ 关卡 4 启动：GPIO 外部中断与事件驱动教学     ");
     ESP_LOGI(TAG, "==================================================");
 
-    init_system_gpios();
+    init_system_interrupt();
 
-    int pir_last_state = -1; // 记录上一次红外状态，防止刷屏日志
-    int button_last_level = 1; // 按键平时松开为高电平 1
+    uint32_t last_reported_count = 0;
 
-    ESP_LOGI(TAG, ">>> 系统已就绪，请按下板载按键 SW3，或用手靠近 SR602 红外探头...");
+    ESP_LOGI(TAG, ">>> 系统已进入低功耗待机状态，CPU 完全无需轮询检测...");
+    ESP_LOGI(TAG, ">>> 请随时按下 SW3 按键，体验硬件中断的微秒级瞬间响应！");
 
+    // 主任务进入休闲的低频监控状态，CPU 算力 100% 解放！
     while (1) {
-        // -------------------------------------------------------------
-        // 【输入检测 1】：用户按键 SW3 扫描与 20ms 软件消抖
-        // -------------------------------------------------------------
-        int current_btn_level = gpio_get_level(BUTTON_PIN);
-
-        // 如果检测到按键从未按下(1)变为了按下(0)
-        if (button_last_level == 1 && current_btn_level == 0) {
-            // 💡 软件消抖：延时 20 毫秒跳过机械金属弹片的弹性抖动区
-            vTaskDelay(pdMS_TO_TICKS(20));
-
-            // 二次确认：20ms 之后如果依然是低电平 0，才真正判定为“有效按下”
-            if (gpio_get_level(BUTTON_PIN) == 0) {
-                // 翻转 LED 状态 (开灯变关灯，关灯变开灯)
-                g_led_state = !g_led_state;
-                gpio_set_level(LED_PIN, g_led_state ? 1 : 0);
-
-                ESP_LOGI(TAG, "🔘 [按键触发] 用户按下了 SW3！当前指示灯切换为: %s", 
-                         g_led_state ? "🟢【点亮】" : "⚪【熄灭】");
-            }
-        }
-        // 更新按键的历史电平状态
-        button_last_level = current_btn_level;
-
-        // -------------------------------------------------------------
-        // 【输入检测 2】：SR602 人体红外探头状态监测
-        // -------------------------------------------------------------
-        int current_pir_state = gpio_get_level(PIR_PIN);
-
-        // 只有当红外状态发生变化时（有人来 / 有人走），才打印日志
-        if (current_pir_state != pir_last_state) {
-            if (current_pir_state == 1) {
-                ESP_LOGW(TAG, "🚶‍♂️ [红外感应] 探测到人体活动！(GPIO34 = 1 高电平)");
-            } else {
-                ESP_LOGI(TAG, "🍃 [红外感应] 人体离开或静止无感应。(GPIO34 = 0 低电平)");
-            }
-            pir_last_state = current_pir_state;
+        // 只有当中断计数发生改变时，才在主任务中打印日志 (主任务打印更安全，不阻塞中断)
+        if (g_intr_count != last_reported_count) {
+            ESP_LOGI(TAG, "⚡ [中断事件捕获] 按键第 %lu 次硬件打断！当前灯光: %s (响应时间戳: %lld ms)",
+                     g_intr_count,
+                     g_led_state ? "🟢【点亮】" : "⚪【熄灭】",
+                     g_last_intr_time / 1000);
+            
+            last_reported_count = g_intr_count;
         }
 
-        // 极短休眠 10ms，既不漏掉按键点击，又把算力让给后台系统
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // 主任务休眠 500ms，CPU 彻底释放，等待硬件下一次打断
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
