@@ -74,7 +74,8 @@
 * 📘 [**第 10 章：ESP32 驱动 1.69寸 ST7789 彩屏与几何图形渲染(SPI DMA)**](./book/10_ST7789彩屏驱动与几何图形渲染.md)
 * 📘 [**第 11 章：ESP32 搭载 LVGL v9 现代图形界面与 CST816S 电容触摸实战**](./book/11_LVGL图形框架与电容触摸实战.md)
 * 📘 [**第 12 章：ESP32 Wi-Fi 连接管理与 HTTP 互联网天气时钟**](./book/12_WiFi连接管理与HTTP天气时钟.md)
-* 📘 *(第 13 ~ 18 章随实战路线持续推进)*
+* 📘 [**第 13 章：ESP32 MQTT 协议接入与阿里云 IoT 物联网平台实战**](./book/13_MQTT协议接入与阿里云IoT实战.md)
+* 📘 *(第 14 ~ 18 章随实战路线持续推进)*
 
 ---
 
@@ -95,7 +96,8 @@ code/
 ├── 09_nvs_storage/         # Level 09: 实验1(开机计数器) / 实验2(用户偏好读写) / 实验3(配置管理与出厂重置)
 ├── 10_st7789_display/      # Level 10: 实验1(彩屏三原色) / 实验2(几何卡片) / 实验3(动态示波器仪表盘)
 ├── 11_lvgl_touch/          # Level 11: 实验1(LVGL Hello) / 实验2(触摸按钮) / 实验3(智能家居中控面板)
-└── 12_wifi_weather/        # Level 12: 实验1(WiFi STA连接) / 实验2(SNTP授时时钟) / 实验3(HTTP天气时钟)
+├── 12_wifi_weather/        # Level 12: 实验1(WiFi STA连接) / 实验2(SNTP授时时钟) / 实验3(HTTP天气时钟)
+└── 13_mqtt_iot/            # Level 13: 实验1(MQTT PubSub) / 实验2(遥测数据上报) / 实验3(手机远程控制中枢)
 ```
 
 ### 🛠️ 使用 `switch_code.sh` 秒级切换与运行实验
@@ -107,11 +109,11 @@ code/
 ./switch_code.sh list
 
 # 2. 一键切换到指定关卡和实验 (部署到 main/app_main.c)
-./switch_code.sh 12 1          # 切换到第 12 关实验 1 (WiFi STA 健壮连接)
-./switch_code.sh 12 3          # 切换到第 12 关实验 3 (HTTP 天气时钟综合系统)
+./switch_code.sh 13 1          # 切换到第 13 关实验 1 (MQTT Pub/Sub 基础)
+./switch_code.sh 13 3          # 切换到第 13 关实验 3 (手机远程控制中枢)
 
 # 3. 一键切换并直接编译/烧录运行
-./switch_code.sh 12 3 --flash  # 切换到第 12 关实验 3 并自动烧录启动监视器
+./switch_code.sh 13 3 --flash  # 切换到第 13 关实验 3 并自动烧录启动监视器
 ```
 
 ---
@@ -137,7 +139,8 @@ code/
 │   ├── 09_nvs_storage/
 │   ├── 10_st7789_display/
 │   ├── 11_lvgl_touch/
-│   └── 12_wifi_weather/
+│   ├── 12_wifi_weather/
+│   └── 13_mqtt_iot/
 │
 ├── main/                          # 核心构建主入口
 │   ├── app_main.c                 # 当前激活关卡源码
@@ -159,6 +162,7 @@ code/
 │   ├── 10_ST7789彩屏驱动与几何图形渲染.md
 │   ├── 11_LVGL图形框架与电容触摸实战.md
 │   ├── 12_WiFi连接管理与HTTP天气时钟.md
+│   ├── 13_MQTT协议接入与阿里云IoT实战.md
 │   └── ... (更多章节)
 │
 ├── docs/                          # 硬件原理图、实物照片与设计资料

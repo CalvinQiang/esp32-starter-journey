@@ -49,6 +49,7 @@ function list_experiments() {
         "10_st7789_display:第 10 关: ST7789 彩屏与几何图形渲染"
         "11_lvgl_touch:第 11 关: LVGL 图形框架与电容触摸"
         "12_wifi_weather:第 12 关: WiFi 联网与 HTTP 天气时钟"
+        "13_mqtt_iot:第 13 关: MQTT 物联网通信与手机远程控制"
     )
 
     for entry in "${chapters[@]}"; do
