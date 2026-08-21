@@ -77,7 +77,8 @@
 * 📘 [**第 13 章：ESP32 MQTT 协议接入与阿里云 IoT 物联网平台实战**](./book/13_MQTT协议接入与阿里云IoT实战.md)
 * 📘 [**第 14 章：ESP32 BLE 低功耗蓝牙实战与手机 App / 微信小程序双向互联**](./book/14_BLE低功耗蓝牙与微信小程序互联.md)
 * 📘 [**第 15 章：ESP32 挂载 MicroSD/TF 卡(4-bit SDIO)与 FATFS 文件系统**](./book/15_TF卡文件系统与电子相册.md)
-* 📘 *(第 16 ~ 18 章随实战路线持续推进)*
+* 📘 [**第 16 章：ESP32 低功耗电源管理与 Deep-sleep 深度睡眠唤醒(电池省电技术)**](./book/16_低功耗电源管理与DeepSleep.md)
+* 📘 *(第 17 ~ 18 章随实战路线持续推进)*
 
 ---
 
@@ -101,7 +102,8 @@ code/
 ├── 12_wifi_weather/        # Level 12: 实验1(WiFi STA连接) / 实验2(SNTP授时时钟) / 实验3(HTTP天气时钟)
 ├── 13_mqtt_iot/            # Level 13: 实验1(MQTT PubSub) / 实验2(遥测数据上报) / 实验3(手机远程控制中枢)
 ├── 14_ble_gatt/            # Level 14: 实验1(BLE广播发现) / 实验2(GATT特征读写) / 实验3(BLE遥控器与Notify)
-└── 15_sdcard_fatfs/        # Level 15: 实验1(TF卡挂载) / 实验2(传感器黑匣子) / 实验3(目录树资源浏览)
+├── 15_sdcard_fatfs/        # Level 15: 实验1(TF卡挂载) / 实验2(传感器黑匣子) / 实验3(目录树资源浏览)
+└── 16_low_power_deepsleep/ # Level 16: 实验1(Timer定时休眠) / 实验2(按键/红外唤醒) / 实验3(低功耗哨兵巡航)
 ```
 
 ### 🛠️ 使用 `switch_code.sh` 秒级切换与运行实验
@@ -113,11 +115,11 @@ code/
 ./switch_code.sh list
 
 # 2. 一键切换到指定关卡和实验 (部署到 main/app_main.c)
-./switch_code.sh 15 1          # 切换到第 15 关实验 1 (TF 卡 4-bit 挂载)
-./switch_code.sh 15 3          # 切换到第 15 关实验 3 (TF 卡目录树与文件浏览器)
+./switch_code.sh 16 1          # 切换到第 16 关实验 1 (Timer 深度休眠与 RTC 保持)
+./switch_code.sh 16 3          # 切换到第 16 关实验 3 (低功耗哨兵巡航工程)
 
 # 3. 一键切换并直接编译/烧录运行
-./switch_code.sh 15 3 --flash  # 切换到第 15 关实验 3 并自动烧录启动监视器
+./switch_code.sh 16 3 --flash  # 切换到第 16 关实验 3 并自动烧录启动监视器
 ```
 
 ---
@@ -146,7 +148,8 @@ code/
 │   ├── 12_wifi_weather/
 │   ├── 13_mqtt_iot/
 │   ├── 14_ble_gatt/
-│   └── 15_sdcard_fatfs/
+│   ├── 15_sdcard_fatfs/
+│   └── 16_low_power_deepsleep/
 │
 ├── main/                          # 核心构建主入口
 │   ├── app_main.c                 # 当前激活关卡源码
@@ -171,6 +174,7 @@ code/
 │   ├── 13_MQTT协议接入与阿里云IoT实战.md
 │   ├── 14_BLE低功耗蓝牙与微信小程序互联.md
 │   ├── 15_TF卡文件系统与电子相册.md
+│   ├── 16_低功耗电源管理与DeepSleep.md
 │   └── ... (更多章节)
 │
 ├── docs/                          # 硬件原理图、实物照片与设计资料
