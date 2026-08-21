@@ -46,6 +46,7 @@ function list_experiments() {
         "07_adc_ultrasonic:第 07 关: ADC 模拟量采集与超声波测距"
         "08_i2c_dht11:第 08 关: I2C 通信总线与 DHT11 温湿度"
         "09_nvs_storage:第 09 关: NVS 存储与 Flash 偏好设置"
+        "10_st7789_display:第 10 关: ST7789 彩屏与几何图形渲染"
     )
 
     for entry in "${chapters[@]}"; do
