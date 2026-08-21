@@ -53,6 +53,7 @@ function list_experiments() {
         "14_ble_gatt:第 14 关: BLE 蓝牙广播与手机透传遥控"
         "15_sdcard_fatfs:第 15 关: TF 卡 SDIO 驱动与 FatFS 文件系统"
         "16_low_power_deepsleep:第 16 关: 低功耗电源管理与 Deep-sleep 休眠"
+        "17_software_architecture:第 17 关: 嵌入式分层架构与事件总线"
     )
 
     for entry in "${chapters[@]}"; do
