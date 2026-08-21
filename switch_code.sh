@@ -47,6 +47,7 @@ function list_experiments() {
         "08_i2c_dht11:第 08 关: I2C 通信总线与 DHT11 温湿度"
         "09_nvs_storage:第 09 关: NVS 存储与 Flash 偏好设置"
         "10_st7789_display:第 10 关: ST7789 彩屏与几何图形渲染"
+        "11_lvgl_touch:第 11 关: LVGL 图形框架与电容触摸"
     )
 
     for entry in "${chapters[@]}"; do
