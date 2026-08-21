@@ -44,50 +44,118 @@ flowchart TD
 
 ---
 
-## 5.2 拆解 FreeRTOS 任务核心机制
+---
 
-在 FreeRTOS 中，每一个“任务（Task）”本质上就是一个**永远不返回的 C 语言函数**。
+## 5.2 🗺️ FreeRTOS 多任务与队列开发全景（先看总体 4 步流水线骨架）
 
-### 1. 先看一眼：一个最标准的 FreeRTOS 任务长啥样？
+在深入任何细节之前，我们先站在上帝视角，看清一个标准的 FreeRTOS 多任务工程是**如何从零搭起 4 步骨架的**：
+
+```mermaid
+flowchart TD
+    Step1["【步骤 1：定义数据胶囊】\n定义结构体 app_event_t，规定任务之间传递什么数据"] --> Step2["【步骤 2：造出安全传送带】\nxQueueCreate() 创建跨任务消息队列"]
+    Step2 --> Step3["【步骤 3：写好各自的专职打工人】\n编写 Task 函数: 生产者往队列塞数据，消费者从队列取数据"]
+    Step3 --> Step4["【步骤 4：分配工位并开工】\nxTaskCreatePinnedToCore() 把任务分别派到 Core 0 和 Core 1 并发运行！"]
+```
+
+### 💻 4 步极简流水线标准代码全貌（一眼看懂）：
+
+```c
+// =========================================================================
+// 步骤 1：定义在传送带上流动的“数据胶囊结构体”
+// =========================================================================
+typedef struct {
+    int event_type;       // 事件类型 (比如 1 代表按键，2 代表红外)
+    int64_t timestamp_us; // 事件发生的微秒时间戳
+} app_event_t;
+
+static QueueHandle_t g_event_queue = NULL; // 传送带全局句柄
+
+// =========================================================================
+// 步骤 2：编写各自的专职任务函数（专人专事，永不退出的 while(1)）
+// =========================================================================
+// 生产者任务：负责采集
+void task_sensor_producer(void *pvParameters) {
+    while (1) {
+        app_event_t event = { .event_type = 1, .timestamp_us = esp_timer_get_time() };
+        xQueueSend(g_event_queue, &event, pdMS_TO_TICKS(10)); // 塞入传送带
+        vTaskDelay(pdMS_TO_TICKS(1000));                      // 睡 1 秒
+    }
+}
+
+// 消费者任务：负责执行
+void task_actuator_consumer(void *pvParameters) {
+    app_event_t rx_event;
+    while (1) {
+        // 阻塞等待传送带！没有数据就深度休眠(0% CPU)，一有数据秒醒！
+        if (xQueueReceive(g_event_queue, &rx_event, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "收到事件: %d, 耗时标记: %lld ms", rx_event.event_type, rx_event.timestamp_us / 1000);
+        }
+    }
+}
+
+// =========================================================================
+// 步骤 3 & 4：在 app_main 中创建传送带，并把任务分配到双核启动！
+// =========================================================================
+void app_main(void) {
+    // 步骤 3：创建容量为 10 个数据包的队列传送带
+    g_event_queue = xQueueCreate(10, sizeof(app_event_t));
+
+    // 步骤 4：分配工位并启动任务！
+    // 生产者跑在 Core 0 (优先级 2)，消费者跑在 Core 1 (优先级 3)
+    xTaskCreatePinnedToCore(task_sensor_producer, "task_producer", 3072, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(task_actuator_consumer, "task_consumer", 3584, NULL, 3, NULL, 1);
+}
+```
+
+看完了这清晰明了的 **4 步流水线骨架**，接下来我们由浅入深，逐一拆解每个核心机制背后的原理与玄机！
+
+---
+
+## 5.3 🚀 深度拆解：如何写好一个 FreeRTOS 任务？
+
+在刚才的骨架中，你看到了两个独立的任务函数。在 FreeRTOS 中，每一个“任务（Task）”本质上就是一个**永远不返回的独立 C 语言函数**。
+
+### 1. 任务函数的黄金结构模板
 
 ```c
 void my_sensor_task(void *pvParameters)
 {
-    // 1. 任务局部初始化（只跑一次）
+    // 1. 任务局部初始化（只跑一次，比如初始化该任务私有的变量）
     ESP_LOGI(TAG, "传感器任务启动就绪！");
 
-    // 2. 任务核心死循环（永远不准 return 退出！）
+    // 2. 任务核心死循环（必须是 while(1)，永远不准 return 退出！）
     while (1) {
-        // 干活：读取数据...
+        // ① 干活：读取数据、处理计算...
         
-        // 关键：干完活必须定闹钟休眠，让出 CPU 算力！
+        // ② 关键：干完活必须主动交出 CPU 算力！
+        // 可以是定闹钟休眠 vTaskDelay()，也可以是阻塞等待队列 xQueueReceive()
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    // ⚠️ 严禁让代码直接执行到函数末尾！如果非要销毁任务，必须显式调用：
+    // ⚠️ 严禁让代码自然执行到函数大括号末尾！如果某个任务确实只需要跑一次就结束，必须显式自杀：
     // vTaskDelete(NULL);
 }
 ```
 
 ---
 
-### 2. 🚀 创建任务并绑定 ESP32 双核：`xTaskCreatePinnedToCore()`
+### 2. 🚀 创建任务并指派工位：`xTaskCreatePinnedToCore()`
 
-ESP32-WROOM-32E 芯片内部是一颗**双核（Dual-Core）处理器**（**Core 0** 和 **Core 1**）。ESP-IDF 提供了专属的创建函数，允许我们把不同的任务指派到不同的物理核心上去跑！
+ESP32-WROOM-32E 芯片内部是一颗真正的**双核（Dual-Core）处理器**（**Core 0** 和 **Core 1**）。ESP-IDF 提供了专属的创建函数，允许我们把不同的任务指派到不同的物理核心上去跑！
 
 ```c
 xTaskCreatePinnedToCore(
-    task_sensor_producer,    // 1. 任务函数指针
-    "task_sensor",           // 2. 任务名称（用于调试日志，最大 16 字节）
-    3072,                    // 3. 任务栈深度（Stack Depth，单位：字节）
-    NULL,                    // 4. 传递给任务的入参（没有则传 NULL）
-    2,                       // 5. 任务优先级（数字越大优先级越高，如 0~24）
-    NULL,                    // 6. 传出任务句柄（用于后续删除/挂起，不需要可传 NULL）
-    0                        // 7. 绑定 CPU 核心（0 代表 Core 0，1 代表 Core 1，tskNO_AFFINITY 代表随意）
+    task_sensor_producer,    // 1. 任务函数指针 (派谁去干活)
+    "task_sensor",           // 2. 任务名称 (用于调试与日志识别，最大 16 字节)
+    3072,                    // 3. 任务栈深度 (给该任务分配多大的独立工作台，单位：字节)
+    NULL,                    // 4. 传递给任务的入参 (没有则传 NULL)
+    2,                       // 5. 任务优先级 (数字越大优先级越高，如 0~24)
+    NULL,                    // 6. 传出任务句柄 (用于后续挂起或删除，不需要可传 NULL)
+    0                        // 7. 绑定 CPU 核心 (0 代表 Core 0，1 代表 Core 1，tskNO_AFFINITY 代表随意分配)
 );
 ```
 
-#### 🔍 4 个最关键参数深度剖析：
+#### 🔍 2 个最关键参数深度拆解（小白必知）：
 
 ##### ① 参数 3：栈深度（Stack Size）到底该给多大？
 * 每一个任务在创建时，FreeRTOS 都会在内存里给它切出一块**“专属工作台（任务栈）”**，用来存放该任务运行时的局部变量、函数调用层级；
@@ -100,17 +168,17 @@ xTaskCreatePinnedToCore(
 
 ##### ② 参数 5：任务优先级（Priority）—— 谁高谁先跑
 * FreeRTOS 是**抢占式调度器（Preemptive Scheduling）**；
-* **规则 1**：只要系统中存在**高优先级**的任务处于“就绪干活状态”，CPU 就会毫不犹豫地立刻剥夺低优先级任务的算力，全部砸给高优先级任务；
-* **规则 2（同优先级平等分享）**：如果两个任务优先级相同（比如都是 2），调度器就会按 1ms 的时间片一人轮流跑一会（时间片轮转）；
-* **规则 3（防饿死原则）**：高优先级任务**千万不能写无延时的死循环 `while(1) {}`**，否则低优先级任务将永远拿不到 CPU 算力而被“活活饿死”！
+* **规则 1（强者优先）**：只要系统中存在**高优先级**的任务处于“就绪干活状态”，CPU 就会毫不犹豫地立刻剥夺低优先级任务的算力，全部砸给高优先级任务；
+* **规则 2（同级平等）**：如果两个任务优先级相同（比如都是 2），调度器就会按 1ms 的时间片一人轮流跑一会（时间片轮转）；
+* **规则 3（防饿死铁律）**：高优先级任务**千万不能写无延时的空死循环 `while(1) {}`**，否则低优先级任务将永远拿不到 CPU 算力而被“活活饿死”！
 
 ---
 
-## 5.3 跨任务通信的灵魂 —— 消息队列（Queue）
+## 5.4 📦 深度拆解：跨任务通信的灵魂 —— 消息队列（Queue）
 
-现在我们有了多个任务（比如：任务 A 负责检测按键、任务 B 负责在屏幕上画图）。
+现在我们有了多个任务（任务 A 负责采集传感器、任务 B 负责在屏幕上画图）。
 
-初学者最容易想到的通信方式就是：**“在全局定义一个全局变量 `int g_key_val`，任务 A 往里写，任务 B 从里读，不就行了吗？”**
+很多初学者第一反应是：**“为什么不直接定义一个全局变量 `int g_sensor_data`，任务 A 往里写，任务 B 从里读，不就行了吗？”**
 
 ### ❌ 为什么多任务之间“严禁直接裸用全局变量”？（数据撕裂事故现场）
 
@@ -151,44 +219,7 @@ flowchart TD
 
 ---
 
-### 📋 消息队列标准使用 3 步法：
-
-#### 步骤 1：定义你的“数据胶囊结构体”
-```c
-typedef struct {
-    int event_id;         // 事件 ID
-    int64_t timestamp_us; // 发生时的微秒时间戳
-    int value;            // 携带的数值
-} app_event_t;
-
-static QueueHandle_t g_event_queue = NULL; // 队列全局句柄
-```
-
-#### 步骤 2：开机创建队列传送带（`xQueueCreate`）
-```c
-// 创建一个最多可容纳 10 个数据胶囊、每个胶囊大小为 sizeof(app_event_t) 的队列
-g_event_queue = xQueueCreate(10, sizeof(app_event_t));
-```
-
-#### 步骤 3：生产者发送（`xQueueSend`）与 消费者接收（`xQueueReceive`）
-* **生产者发送**：
-  ```c
-  app_event_t msg = { .event_id = 1, .timestamp_us = esp_timer_get_time(), .value = 100 };
-  // 发送数据到队列，如果队列满了，最多等待 10 毫秒
-  xQueueSend(g_event_queue, &msg, pdMS_TO_TICKS(10));
-  ```
-* **消费者接收**：
-  ```c
-  app_event_t rx_msg;
-  // 从队列收取数据，portMAX_DELAY 代表如果没数据就一直睡到天荒地老，有数据瞬间秒醒！
-  if (xQueueReceive(g_event_queue, &rx_msg, portMAX_DELAY) == pdTRUE) {
-      ESP_LOGI(TAG, "收到事件 ID: %d, 数值: %d", rx_msg.event_id, rx_msg.value);
-  }
-  ```
-
----
-
-## 5.4 第四关伏笔闭环：中断（ISR）如何安全给任务发消息？
+## 5.5 ⚡ 第四关伏笔闭环：中断（ISR）如何安全给任务发消息？
 
 在上一关中，我们留了一个悬念：**“中断里不能干重活，必须由前台发便签、后台慢慢干”**。
 
@@ -229,7 +260,7 @@ static void IRAM_ATTR button_isr_handler(void* arg)
 
 ---
 
-## 5.5 关卡源码逐行带读（[`main/app_main.c`](../main/app_main.c)）
+## 5.6 💻 关卡源码逐行带读（[`main/app_main.c`](../main/app_main.c)）
 
 我们来看看本关完整的双核多任务与队列架构：
 
