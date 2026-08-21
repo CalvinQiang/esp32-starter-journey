@@ -48,6 +48,7 @@ function list_experiments() {
         "09_nvs_storage:第 09 关: NVS 存储与 Flash 偏好设置"
         "10_st7789_display:第 10 关: ST7789 彩屏与几何图形渲染"
         "11_lvgl_touch:第 11 关: LVGL 图形框架与电容触摸"
+        "12_wifi_weather:第 12 关: WiFi 联网与 HTTP 天气时钟"
     )
 
     for entry in "${chapters[@]}"; do

@@ -163,13 +163,13 @@
 
 ### 【阶段五：无线互联与智能物联网 —— 打通手机与云端】
 
-#### 第 12 关：ESP32 Wi-Fi 联网、SNTP 网络授时时钟与 HTTP/cJSON 天气获取 📖 [【阅读深度教程】](./book/12_WiFi联网与SNTP天气时钟.md)
-- [ ] **打卡目标**：让 ESP32 融入局域网与互联网，自动校准时间和拉取天气。
+#### 第 12 关：ESP32 Wi-Fi 联网、SNTP 网络授时时钟与 HTTP/cJSON 天气获取 📖 [【阅读深度教程】](./book/12_WiFi连接管理与HTTP天气时钟.md)
+- [x] **打卡目标**：让 ESP32 融入局域网与互联网，自动校准时间和拉取天气。
 - **涉及模块**：Wi-Fi Station 模式 + SNTP 网络时钟 + ESP-HTTP-Client + cJSON 库
 - **实验内容**：
-  1. 连接路由器 2.4G Wi-Fi 热点，获取 IP 地址。
-  2. 通过阿里云 NTP 服务器获取北京时间并格式化输出。
-  3. 发送 HTTP GET 请求天气 API，使用 `cJSON` 解析出当前城市、实时温度与天气图标。
+  1. 连接路由器 2.4G Wi-Fi 热点，事件循环捕获 `IP_EVENT_STA_GOT_IP` 与断线自动重连。
+  2. 通过阿里云 NTP 服务器（`ntp.aliyun.com`）获取北京时间（CST-8）并格式化输出。
+  3. 发送 HTTP GET 请求 Open-Meteo RESTful API，使用 `cJSON` 安全解析气温与风速。
 - **核心知识**：Wi-Fi 事件循环机制（Event Loop）、SNTP 协议、HTTP GET 请求头、cJSON 树状节点解析与内存防泄漏。
 
 #### 第 13 关：ESP32 MQTT 物联网双向通信与云平台联动实战(手机远程控制) 📖 [【阅读深度教程】](./book/13_MQTT物联网双向通信与云平台联动.md)

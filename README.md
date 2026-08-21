@@ -73,7 +73,8 @@
 * 📘 [**第 09 章：ESP32 NVS 非易失性存储与 Flash 偏好设置(断电不丢数据)**](./book/09_NVS非易失性存储与Flash偏好设置.md)
 * 📘 [**第 10 章：ESP32 驱动 1.69寸 ST7789 彩屏与几何图形渲染(SPI DMA)**](./book/10_ST7789彩屏驱动与几何图形渲染.md)
 * 📘 [**第 11 章：ESP32 搭载 LVGL v9 现代图形界面与 CST816S 电容触摸实战**](./book/11_LVGL图形框架与电容触摸实战.md)
-* 📘 *(第 12 ~ 18 章随实战路线持续推进)*
+* 📘 [**第 12 章：ESP32 Wi-Fi 连接管理与 HTTP 互联网天气时钟**](./book/12_WiFi连接管理与HTTP天气时钟.md)
+* 📘 *(第 13 ~ 18 章随实战路线持续推进)*
 
 ---
 
@@ -93,7 +94,8 @@ code/
 ├── 08_i2c_dht11/           # Level 08: 实验1(I2C Scanner) / 实验2(DHT11温湿度) / 实验3(双总线气象站)
 ├── 09_nvs_storage/         # Level 09: 实验1(开机计数器) / 实验2(用户偏好读写) / 实验3(配置管理与出厂重置)
 ├── 10_st7789_display/      # Level 10: 实验1(彩屏三原色) / 实验2(几何卡片) / 实验3(动态示波器仪表盘)
-└── 11_lvgl_touch/          # Level 11: 实验1(LVGL Hello) / 实验2(触摸按钮) / 实验3(智能家居中控面板)
+├── 11_lvgl_touch/          # Level 11: 实验1(LVGL Hello) / 实验2(触摸按钮) / 实验3(智能家居中控面板)
+└── 12_wifi_weather/        # Level 12: 实验1(WiFi STA连接) / 实验2(SNTP授时时钟) / 实验3(HTTP天气时钟)
 ```
 
 ### 🛠️ 使用 `switch_code.sh` 秒级切换与运行实验
@@ -105,11 +107,11 @@ code/
 ./switch_code.sh list
 
 # 2. 一键切换到指定关卡和实验 (部署到 main/app_main.c)
-./switch_code.sh 11 1          # 切换到第 11 关实验 1 (LVGL 基础跑通)
-./switch_code.sh 11 3          # 切换到第 11 关实验 3 (智能家居中控屏)
+./switch_code.sh 12 1          # 切换到第 12 关实验 1 (WiFi STA 健壮连接)
+./switch_code.sh 12 3          # 切换到第 12 关实验 3 (HTTP 天气时钟综合系统)
 
 # 3. 一键切换并直接编译/烧录运行
-./switch_code.sh 11 3 --flash  # 切换到第 11 关实验 3 并自动烧录启动监视器
+./switch_code.sh 12 3 --flash  # 切换到第 12 关实验 3 并自动烧录启动监视器
 ```
 
 ---
@@ -134,7 +136,8 @@ code/
 │   ├── 08_i2c_dht11/
 │   ├── 09_nvs_storage/
 │   ├── 10_st7789_display/
-│   └── 11_lvgl_touch/
+│   ├── 11_lvgl_touch/
+│   └── 12_wifi_weather/
 │
 ├── main/                          # 核心构建主入口
 │   ├── app_main.c                 # 当前激活关卡源码
@@ -155,6 +158,7 @@ code/
 │   ├── 09_NVS非易失性存储与Flash偏好设置.md
 │   ├── 10_ST7789彩屏驱动与几何图形渲染.md
 │   ├── 11_LVGL图形框架与电容触摸实战.md
+│   ├── 12_WiFi连接管理与HTTP天气时钟.md
 │   └── ... (更多章节)
 │
 ├── docs/                          # 硬件原理图、实物照片与设计资料
