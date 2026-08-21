@@ -72,16 +72,59 @@
 
 ---
 
-## 📂 项目目录结构
+## 📂 源码目录结构与示例代码一键切换 (`code/`)
+
+本项目为每个章节的每个演进实验都提供了**独立、完整、可直接编译运行的 C 语言源码文件**，统一存放在 [`code/`](./code) 目录下。
+
+```text
+code/
+├── 01_hello_world/         # Level 01: 串口通信与 Hello World 打印
+├── 02_gpio_pwm/            # Level 02: 实验1(LED闪烁) / 实验2(PWM呼吸灯)
+├── 03_gpio_input/          # Level 03: 实验1(按键消抖) / 实验2(人体红外感应)
+├── 04_gpio_interrupt/      # Level 04: 实验1(GPIO外部中断与事件驱动)
+├── 05_freertos_queue/      # Level 05: 实验1(FreeRTOS多任务与双核队列通信)
+├── 06_ws2812_rmt/          # Level 06: 实验1(RMT硬件脉冲与WS2812彩虹流光)
+└── 07_adc_ultrasonic/      # Level 07: 实验1(ADC采样) / 实验2(NTC测温) / 实验3(超声波测距) / 实验4(温声雷达)
+```
+
+### 🛠️ 使用 `switch_code.sh` 秒级切换与运行实验
+
+为了避免频繁手动复制粘贴代码，项目根目录提供了便捷的切换脚本 [`switch_code.sh`](./switch_code.sh)：
+
+```bash
+# 1. 查看所有可用关卡与实验清单
+./switch_code.sh list
+
+# 2. 一键切换到指定关卡和实验 (部署到 main/app_main.c)
+./switch_code.sh 7 2          # 切换到第 07 关实验 2 (NTC精准摄氏度测温)
+./switch_code.sh 2 2          # 切换到第 02 关实验 2 (PWM呼吸灯)
+
+# 3. 一键切换并直接编译/烧录运行
+./switch_code.sh 7 4 --flash  # 切换到第 07 关实验 4 (温声雷达) 并自动烧录启动监视器
+```
+
+---
+
+## 📂 项目完整目录结构
 
 ```text
 ├── ESP32_小白入门实战学习计划.md   # 18 关实战任务与打卡指南
 ├── README.md                      # 项目说明文档
+├── switch_code.sh                 # 🛠️ 示例代码一键切换与编译工具
 ├── CMakeLists.txt                 # ESP-IDF 根项目构建脚本
 ├── sdkconfig.defaults             # 默认芯片配置 (PSRAM / 主频 / LVGL)
 │
-├── main/                          # 核心业务源码
-│   ├── app_main.c                 # 当前关卡源码 (10大酷炫 WS2812 RGB 灯效)
+├── code/                          # 💻 各关卡独立实验源码库 (可一键切换)
+│   ├── 01_hello_world/
+│   ├── 02_gpio_pwm/
+│   ├── 03_gpio_input/
+│   ├── 04_gpio_interrupt/
+│   ├── 05_freertos_queue/
+│   ├── 06_ws2812_rmt/
+│   └── 07_adc_ultrasonic/
+│
+├── main/                          # 核心构建主入口
+│   ├── app_main.c                 # 当前激活关卡源码
 │   ├── CMakeLists.txt             # 组件构建配置
 │   └── idf_component.yml          # LVGL 与触摸组件依赖
 │
@@ -94,6 +137,7 @@
 │   ├── 04_GPIO外部中断与按键事件驱动.md
 │   ├── 05_FreeRTOS多任务调度与队列通信.md
 │   ├── 06_RMT硬件脉冲与WS2812幻彩RGB.md
+│   ├── 07_ADC模数转换与超声波测距.md
 │   └── ... (更多章节)
 │
 ├── docs/                          # 硬件原理图、实物照片与设计资料
