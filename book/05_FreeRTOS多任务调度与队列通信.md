@@ -243,44 +243,126 @@ flowchart TD
 
 ---
 
-## 5.5 ⚡ 第四关伏笔闭环：中断（ISR）如何安全给任务发消息？
+## 5.5 ⚡ 灵魂贯通：硬件中断（ISR）如何与多任务安全通信？
 
-在上一关中，我们留了一个悬念：**“中断里不能干重活，必须由前台发便签、后台慢慢干”**。
+### 1. 剧情回顾：第 04 关留下的那个“最大悬念”
 
-那前台中断究竟怎么给后台任务递这封“便签”呢？
+在上一关学习硬件中断时，我们树立了单片机开发的核心戒律：
+* 中断拥有至高无上的特权，必须 **“快进快出，绝不恋战”**（耗时 1 微秒之内）；
+* 耗时几十毫秒的繁重任务（如格式化打印日志、网络发包、屏幕画图），必须遵循 **“前台拉警报，后台慢慢干”** 的原则。
 
-### ⚠️ 绝对严禁在中断里调用普通的 `xQueueSend`！
-* 普通的 `xQueueSend` 带有“超时等待时间（如 `pdMS_TO_TICKS(10)`）”，如果队列满了它会尝试休眠等待；
-* 但在第四关我们已经学过：**中断具有最高特权，严禁在中断里休眠等待！**
-* 如果在 ISR 里调用普通 `xQueueSend`，单片机会当场触发内核断言崩溃！
+但当时几乎所有同学心里都憋着一个巨大的疑问：
+> ❓ **“既然前台中断里不能干重活，那当按键按下时，前台中断究竟该‘通过什么手段’把这封报警便签递给后台任务呢？”**
 
-### ✅ 救星登场：中断专属的 `xQueueSendFromISR`
+现在，我们有了 **FreeRTOS 消息队列（Queue）** 这条坚固的传送带，答案终于呼之欲出了！
 
-FreeRTOS 为所有中断场景提供了带有 `FromISR` 后缀的安全函数：
+---
+
+### 2. ⚠️ 为什么在中断里“严禁使用普通 `xQueueSend`”？
+
+很多初学者学完前面的队列后，第一反应是在中断服务函数（ISR）里顺手写下这行代码：
 
 ```c
-// ⚡ 硬件中断服务函数 (ISR)
+// ❌ 错误示范：在中断服务函数里调用普通 xQueueSend
+static void IRAM_ATTR button_isr_handler(void* arg) {
+    app_event_t event = { .type = EVENT_BUTTON_PRESS };
+    
+    // 😱 致命错误！试图在中断里超时等待 10 毫秒！
+    xQueueSend(g_event_queue, &event, pdMS_TO_TICKS(10)); 
+}
+```
+
+#### 🔍 灾难现场拆解：
+* **普通人寄信（任务上下文）**：如果邮筒满了，普通任务可以定个 10ms 的闹钟坐在路边等一等（进入休眠让出 CPU）；
+* **特勤交警寄信（中断上下文）**：硬件中断好比在高速公路上处理突发险情的特勤交警。交警的特权极其特殊，**整个操作系统的调度器在中断期间都是被暂停锁死的！交警绝对不能休眠等待！**
+* 如果你在中断里调用了带有休眠等待特性的 `xQueueSend()`，FreeRTOS 内核会当场暴怒并触发严重硬件 Panic 崩溃！
+
+---
+
+### 3. 🛡️ 救星登场：中断专用无阻塞投递 —— `xQueueSendFromISR()`
+
+为了让特勤交警能够安全寄信，FreeRTOS 专门定制了带有 `FromISR` 后缀的专属函数：
+
+```c
+// ⚡ 硬件中断服务函数 (ISR) —— 标准工业级写法
 static void IRAM_ATTR button_isr_handler(void* arg)
 {
+    // 1. 打包数据胶囊
     app_event_t event = {
         .type = EVENT_BUTTON_PRESS,
         .timestamp_us = esp_timer_get_time()
     };
 
+    // 2. 准备一面“紧急交接红旗”（初始为 pdFALSE）
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    // 🌟 中断专用安全发队列 API (绝不休眠，瞬间入队)
+    // 3. 🌟 中断专用安全发队列（绝不休眠，塞得进就塞，塞不进立刻返回）
     xQueueSendFromISR(g_event_queue, &event, &xHigherPriorityTaskWoken);
 
-    // 🌟 换幕魔法：如果这次发消息唤醒了一个更高优先级的后台消费者任务，
-    // 立即通知 CPU 在退出中断的一瞬间直接切换到消费者任务执行！
+    // 4. 🌟 即时换幕魔法：如果收信人是大人物，立刻换幕！
     if (xHigherPriorityTaskWoken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
 }
 ```
 
-👉 **架构闭环**：按键按下的瞬间 ➔ 硬件触发中断（ISR 耗时 1 微秒打包入队） ➔ 唤醒 Core 1 上的后台任务 ➔ 后台任务安全优雅地打印日志并翻转灯光！**整个过程没有一丝 CPU 浪费，响应速度达到微秒级极限！**
+---
+
+### 4. 🔍 深度拆解：这两个奇怪的符号到底在干什么？
+
+很多新手看到最后两行代码都会觉得像“天书”，我们用一个 **“剧场换幕”** 的比喻彻底解剖它：
+
+```text
+       【portYIELD_FROM_ISR：剧场即时换幕模型】
+
+ 场景：舞台上正有一个【低优先级群众演员】在慢悠悠扫地 (比如后台心跳任务)
+ 
+ ⚡ 突然，观众按响了火警门铃 (SW3 按键外部中断触发！)
+ 
+ ① 特勤交警 (ISR) 冲上台，往后台邮箱塞了一封【特急灭火通知】；
+ ② 邮箱后台原本在睡觉的【高优先级消防员】(task_actuator) 瞬间被惊醒！
+ ③ FreeRTOS 把交警手里的红旗举了起来 (xHigherPriorityTaskWoken = pdTRUE)！
+ 
+ 此时有两种选择：
+ 
+ ❌ 选择 A (不调用 portYIELD_FROM_ISR)：
+    交警下台后，CPU 依然把舞台还给那个扫地演员，让他慢悠悠把剩下的 1ms 扫完，
+    直到下一个时钟滴答响了，消防员才能登台 (产生了不必要的毫秒级延迟！)。
+    
+ ✅ 选择 B (调用 portYIELD_FROM_ISR —— 大喊一声'换幕！')：
+    交警下台的瞬间，导演立刻把扫地演员拉下台，【0.001 微秒无缝切换让消防员登台！】
+```
+
+#### 📋 总结记忆卡片：
+1. **`xHigherPriorityTaskWoken`**：它是一个传出参数。当队列接收方任务的优先级高于当前被打断的任务时，函数内部会把它自动设为 `pdTRUE`（告诉你：“有更重要的主角醒了！”）；
+2. **`portYIELD_FROM_ISR()`**：如果红旗举起来了，立刻在退出中断的瞬间强制触发一次**内核级上下文切换（Context Switch）**，让高优先级消费者任务在微秒内立刻无缝接管 CPU！
+
+---
+
+### 5. 🎬 微观时间轴闭环（前后台接力全过程）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 用户手指
+    participant HW as 硬件按键 (GPIO39)
+    participant ISR as 硬件中断 (button_isr)
+    participant Queue as 消息队列 (g_event_queue)
+    participant Task as 消费者任务 (task_actuator)
+
+    User->>HW: 物理按压按键
+    HW->>ISR: 产生 3.3V➔0V 下降沿跳变，打断 CPU！
+    Note over ISR: ⚡ 进入中断 (IRAM_ATTR 高速通道)
+    ISR->>Queue: 调用 xQueueSendFromISR 塞入事件包 (耗时 1µs)
+    Queue-->>ISR: 返回 xHigherPriorityTaskWoken = pdTRUE
+    ISR->>Task: 执行 portYIELD_FROM_ISR() 瞬间换幕！
+    Note over ISR: ⚡ 退出中断，光速交出控制权
+    Note over Task: 🔵 消费者任务在 Core 1 秒醒！
+    Task->>Queue: 从队列取出数据包
+    Task->>Task: 翻转 LED 灯光，安全打印格式化串口日志！
+```
+
+👉 **结论**：通过 **`xQueueSendFromISR` + `portYIELD_FROM_ISR`**，单片机既保证了硬件中断在 1 微秒内极速退出，又保证了后台任务在微秒级时间内无缝接力，这就是现代大型嵌入式操作系统最优雅的高并发架构！
 
 ---
 
