@@ -22,6 +22,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -34,16 +35,21 @@ static const char *TAG = "LEVEL06_WS2812";
 
 /* ========================== 硬件与灯效配置参数 ========================== */
 #define WS2812_GPIO_PIN         GPIO_NUM_26   // WS2812 数据控制引脚 (JP3)
-#define LED_STRIP_NUM_LEDS      8             // 灯珠数量（支持 1~N 颗，板载或外接灯条通用）
+#define LED_STRIP_NUM_LEDS      12            // 灯珠数量（套件配套 HS-F12A 环形灯为 12 颗）
 #define BUTTON_SW3_PIN          GPIO_NUM_39   // 模式切换按键
 
-/* 灯效模式枚举 */
+/* 灯效模式枚举（共 10 大模式） */
 typedef enum {
-    MODE_RAINBOW_FLOW = 0,  // 1. 彩虹流光瀑布
-    MODE_BREATHE_PULSE,     // 2. HSV 呼吸渐变
-    MODE_THEATER_CHASE,     // 3. 影院跑马追逐
-    MODE_COMET_METEOR,      // 4. 流星拖尾光束
-    MODE_SOLID_CYCLE,       // 5. 纯色循环切换
+    MODE_RAINBOW_FLOW = 0,  // 1. 🌈 彩虹流光瀑布
+    MODE_BREATHE_PULSE,     // 2. 🫁 HSV 呼吸渐变
+    MODE_THEATER_CHASE,     // 3. 🎬 影院跑马追逐
+    MODE_COMET_METEOR,      // 4. ☄️ 流星拖尾光束
+    MODE_SOLID_CYCLE,       // 5. 🎨 经典纯色循环
+    MODE_CYBERPUNK_DUAL,    // 6. 🌀 赛博朋克双向对撞 (粉/青两束光交汇爆发白光)
+    MODE_FIRE_FLICKER,      // 7. 🔥 温暖烈焰壁炉微光 (红橙金自然随机抖动)
+    MODE_ARC_REACTOR,       // 8. 💓 钢铁侠反应堆脉冲心跳 (冰蓝双重强弱心跳)
+    MODE_RADAR_SONAR,       // 9. 🧭 雷达声呐余辉扫描 (极速绿色探针余辉)
+    MODE_ALL_OFF,           // 10. 🌑 全黑静音熄灭 (防刺眼/节能休眠)
     MODE_MAX_COUNT
 } led_mode_t;
 
@@ -52,11 +58,16 @@ static led_strip_handle_t s_led_strip = NULL;
 
 /* 模式名称文本映射 */
 static const char *MODE_NAMES[] = {
-    "🌈 [1/5] 彩虹流光瀑布 (Rainbow Flow)",
-    "🫁 [2/5] HSV 呼吸渐变 (Breathing Pulse)",
-    "🎬 [3/5] 影院跑马追逐 (Theater Chase)",
-    "☄️ [4/5] 流星拖尾光束 (Comet Meteor)",
-    "🎨 [5/5] 纯色循环切换 (Solid Cycle)"
+    "🌈 [1/10] 彩虹流光瀑布 (Rainbow Flow)",
+    "🫁 [2/10] HSV 呼吸渐变 (Breathing Pulse)",
+    "🎬 [3/10] 影院跑马追逐 (Theater Chase)",
+    "☄️ [4/10] 流星拖尾光束 (Comet Meteor)",
+    "🎨 [5/10] 经典纯色循环 (Solid Cycle)",
+    "🌀 [6/10] 赛博朋克双向对撞 (Cyberpunk Dual Clash)",
+    "🔥 [7/10] 烈焰壁炉微光 (Fire & Flame Flicker)",
+    "💓 [8/10] 反应堆脉冲心跳 (Arc Reactor Pulse)",
+    "🧭 [9/10] 雷达声呐余辉扫描 (Radar Sonar Scan)",
+    "🌑 [10/10] 全黑静音熄灭 (All Off / Sleep)"
 };
 
 /**
@@ -243,6 +254,128 @@ static void anim_solid_cycle(uint32_t step)
 }
 
 /**
+ * @brief 模式 6：赛博朋克双向对撞 (Cyberpunk Dual Clash)
+ * 顺时针霓虹粉光束与逆时针电光青蓝光束在圆环相遇碰撞，重叠瞬间爆发高亮纯白闪光
+ */
+static void anim_cyberpunk_dual(uint32_t step)
+{
+    led_strip_clear(s_led_strip);
+    int p1 = step % LED_STRIP_NUM_LEDS;
+    int p2 = (LED_STRIP_NUM_LEDS * 2 - (step % LED_STRIP_NUM_LEDS)) % LED_STRIP_NUM_LEDS;
+
+    uint32_t r, g, b;
+    if (p1 == p2) {
+        // 对撞爆裂瞬间：超亮极白闪光
+        for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+            if (i == p1) {
+                led_strip_set_pixel(s_led_strip, i, 255, 255, 255);
+            } else {
+                led_strip_set_pixel(s_led_strip, i, 15, 25, 35);
+            }
+        }
+    } else {
+        // 顺时针赛博粉 (Hue ~ 320°) + 拖尾
+        hsv_to_rgb(320, 240, 255, &r, &g, &b);
+        led_strip_set_pixel(s_led_strip, p1, r, g, b);
+        int t1 = (p1 - 1 + LED_STRIP_NUM_LEDS) % LED_STRIP_NUM_LEDS;
+        hsv_to_rgb(320, 255, 50, &r, &g, &b);
+        led_strip_set_pixel(s_led_strip, t1, r, g, b);
+
+        // 逆时针电光青 (Hue ~ 180°) + 拖尾
+        hsv_to_rgb(180, 240, 255, &r, &g, &b);
+        led_strip_set_pixel(s_led_strip, p2, r, g, b);
+        int t2 = (p2 + 1) % LED_STRIP_NUM_LEDS;
+        hsv_to_rgb(180, 255, 50, &r, &g, &b);
+        led_strip_set_pixel(s_led_strip, t2, r, g, b);
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 7：温暖烈焰壁炉微光 (Fire & Flame Flicker)
+ * 模拟真实木柴燃烧的火苗跳跃，红、橙、金黄在各灯珠间随机明暗抖动
+ */
+static void anim_fire_flicker(uint32_t step)
+{
+    uint32_t r, g, b;
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        uint32_t hue = (rand() % 36);          // 0°~35° 纯红到金黄
+        uint32_t sat = 230 + (rand() % 26);    // 高饱和度
+        uint32_t val = 50 + (rand() % 185);    // 随机明暗抖动
+        hsv_to_rgb(hue, sat, val, &r, &g, &b);
+        led_strip_set_pixel(s_led_strip, i, r, g, b);
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 8：钢铁侠方舟反应堆心跳律动 (Arc Reactor Pulse)
+ * 拟真人体/机械核心“咚-咚---咚-咚”双脉冲心跳节奏，冰蓝与冷白高科技质感
+ */
+static void anim_arc_reactor(uint32_t step)
+{
+    uint32_t r, g, b;
+    uint32_t tick = step % 40; // 一个心跳周期 40 * 25ms = 1000ms
+    uint32_t val = 20;
+    uint32_t sat = 240;
+
+    if (tick < 6) {
+        // 第一跳：主脉冲极速冲击
+        val = 20 + tick * 38;
+        sat = (tick > 3) ? 120 : 200; // 峰值冷白
+    } else if (tick >= 6 && tick < 12) {
+        val = 248 - (tick - 6) * 30;
+    } else if (tick >= 12 && tick < 18) {
+        // 第二跳：副脉冲回弹
+        val = 68 + (tick - 12) * 25;
+        sat = 180;
+    } else if (tick >= 18 && tick < 24) {
+        val = 218 - (tick - 18) * 33;
+    } else {
+        val = 20;
+        sat = 255;
+    }
+
+    hsv_to_rgb(195, sat, val, &r, &g, &b); // 195° 经典方舟反应堆冰蓝色
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        led_strip_set_pixel(s_led_strip, i, r, g, b);
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 9：雷达声呐余辉扫描 (Radar Sonar Scan)
+ * 顺时针声呐扫描，头部正绿探针，尾部多级指数衰减余辉
+ */
+static void anim_radar_sonar(uint32_t step)
+{
+    int head = step % LED_STRIP_NUM_LEDS;
+    uint32_t r, g, b;
+
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        int dist = (head - i + LED_STRIP_NUM_LEDS) % LED_STRIP_NUM_LEDS;
+        if (dist == 0) {
+            hsv_to_rgb(125, 255, 255, &r, &g, &b); // 探针头部
+        } else if (dist <= 5) {
+            uint32_t tail_val = 200 >> dist;       // 指数衰减余辉
+            hsv_to_rgb(125, 255, tail_val, &r, &g, &b);
+        } else {
+            r = g = b = 0;
+        }
+        led_strip_set_pixel(s_led_strip, i, r, g, b);
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 10：全黑静音熄灭 (All Off / Sleep)
+ */
+static void anim_all_off(void)
+{
+    led_strip_clear(s_led_strip);
+}
+
+/**
  * @brief WS2812 动画渲染总任务
  */
 static void task_led_animation(void *arg)
@@ -275,6 +408,31 @@ static void task_led_animation(void *arg)
             case MODE_SOLID_CYCLE:
                 anim_solid_cycle(step);
                 vTaskDelay(pdMS_TO_TICKS(20));
+                break;
+
+            case MODE_CYBERPUNK_DUAL:
+                anim_cyberpunk_dual(step);
+                vTaskDelay(pdMS_TO_TICKS(70));
+                break;
+
+            case MODE_FIRE_FLICKER:
+                anim_fire_flicker(step);
+                vTaskDelay(pdMS_TO_TICKS(45));
+                break;
+
+            case MODE_ARC_REACTOR:
+                anim_arc_reactor(step);
+                vTaskDelay(pdMS_TO_TICKS(25));
+                break;
+
+            case MODE_RADAR_SONAR:
+                anim_radar_sonar(step);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                break;
+
+            case MODE_ALL_OFF:
+                anim_all_off();
+                vTaskDelay(pdMS_TO_TICKS(100)); // 熄灭模式降频运行，节能静音
                 break;
 
             default:
