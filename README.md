@@ -68,7 +68,9 @@
 * 📘 [**第 04 章：ESP32 GPIO 外部中断(ISR)与按键事件驱动**](./book/04_GPIO外部中断与按键事件驱动.md)
 * 📘 [**第 05 章：FreeRTOS 多任务调度与队列(Queue)跨任务通信**](./book/05_FreeRTOS多任务调度与队列通信.md)
 * 📘 [**第 06 章：ESP32 RMT 硬件脉冲外设与 WS2812 幻彩 RGB 跑马灯**](./book/06_RMT硬件脉冲与WS2812幻彩RGB.md)
-* 📘 *(第 07 ~ 18 章随实战路线持续推进)*
+* 📘 [**第 07 章：ESP32 模拟量采集(ADC 测温)与超声波测距(温声融合雷达)**](./book/07_ADC模数转换与超声波测距.md)
+* 📘 [**第 08 章：ESP32 I2C 通信总线探秘与 DHT11 单总线温湿度解析**](./book/08_I2C总线探秘与DHT11温湿度解析.md)
+* 📘 *(第 09 ~ 18 章随实战路线持续推进)*
 
 ---
 
@@ -84,7 +86,8 @@ code/
 ├── 04_gpio_interrupt/      # Level 04: 实验1(GPIO外部中断与事件驱动)
 ├── 05_freertos_queue/      # Level 05: 实验1(FreeRTOS多任务与双核队列通信)
 ├── 06_ws2812_rmt/          # Level 06: 实验1(RMT硬件脉冲与WS2812彩虹流光)
-└── 07_adc_ultrasonic/      # Level 07: 实验1(ADC采样) / 实验2(NTC测温) / 实验3(超声波测距) / 实验4(温声雷达)
+├── 07_adc_ultrasonic/      # Level 07: 实验1(ADC采样) / 实验2(NTC测温) / 实验3(超声波测距) / 实验4(温声雷达)
+└── 08_i2c_dht11/           # Level 08: 实验1(I2C Scanner) / 实验2(DHT11温湿度) / 实验3(双总线气象站)
 ```
 
 ### 🛠️ 使用 `switch_code.sh` 秒级切换与运行实验
@@ -96,11 +99,11 @@ code/
 ./switch_code.sh list
 
 # 2. 一键切换到指定关卡和实验 (部署到 main/app_main.c)
-./switch_code.sh 7 2          # 切换到第 07 关实验 2 (NTC精准摄氏度测温)
-./switch_code.sh 2 2          # 切换到第 02 关实验 2 (PWM呼吸灯)
+./switch_code.sh 8 1          # 切换到第 08 关实验 1 (I2C 地址扫描器)
+./switch_code.sh 8 3          # 切换到第 08 关实验 3 (双总线气象站)
 
 # 3. 一键切换并直接编译/烧录运行
-./switch_code.sh 7 4 --flash  # 切换到第 07 关实验 4 (温声雷达) 并自动烧录启动监视器
+./switch_code.sh 8 3 --flash  # 切换到第 08 关实验 3 并自动烧录启动监视器
 ```
 
 ---
@@ -121,7 +124,8 @@ code/
 │   ├── 04_gpio_interrupt/
 │   ├── 05_freertos_queue/
 │   ├── 06_ws2812_rmt/
-│   └── 07_adc_ultrasonic/
+│   ├── 07_adc_ultrasonic/
+│   └── 08_i2c_dht11/
 │
 ├── main/                          # 核心构建主入口
 │   ├── app_main.c                 # 当前激活关卡源码
@@ -138,6 +142,7 @@ code/
 │   ├── 05_FreeRTOS多任务调度与队列通信.md
 │   ├── 06_RMT硬件脉冲与WS2812幻彩RGB.md
 │   ├── 07_ADC模数转换与超声波测距.md
+│   ├── 08_I2C总线探秘与DHT11温湿度解析.md
 │   └── ... (更多章节)
 │
 ├── docs/                          # 硬件原理图、实物照片与设计资料
