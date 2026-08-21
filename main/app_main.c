@@ -1,281 +1,346 @@
 /**
- * ============================================================================
- * 第 05 关：FreeRTOS 多任务调度与队列(Queue)跨任务通信
- * ============================================================================
+ * ======================================================================================
+ * 🌟 ESP32 物联网实战闯关 —— 第 06 关：ESP32 RMT 硬件脉冲外设与 WS2812 幻彩 RGB 跑马灯
+ * ======================================================================================
  * 
- * 学习目标：
- * 1. 深刻理解嵌入式多任务操作系统的本质（并发、时钟节拍、时间片轮转）。
- * 2. 掌握使用 xTaskCreatePinnedToCore() 在 ESP32 双核（Core 0 / Core 1）上创建与调度任务。
- * 3. 掌握 FreeRTOS 消息队列（Queue）的创建、阻塞等待接收（xQueueReceive）与安全发送。
- * 4. 落地第四关核心思想：在硬件中断 ISR 中通过 xQueueSendFromISR() 跨界安全发消息。
- * 5. 掌握任务栈深度监控（uxTaskGetStackHighWaterMark）与任务优先级设计。
- * ============================================================================
+ * 🎯 【关卡目标】
+ * 1. 深入理解 WS2812 单线归零码（NZR）纳秒级严苛时序协议（800kHz 数据流）；
+ * 2. 掌握 ESP32 独门硬件武器 —— RMT（Remote Control）外设的硬件发波机制与零 CPU 占用特性；
+ * 3. 掌握 HSV（色相/饱和度/明度）与 RGB 颜色空间的数学转换原理；
+ * 4. 驱动板载/外接 WS2812 幻彩 RGB 灯珠，实现“彩虹流光”、“呼吸渐变”、“影院追逐”、“流星彗星”多种炫彩光效；
+ * 5. 结合 SW3 按键实现灯效模式的实时切换与串口交互。
+ * 
+ * 📌 【硬件引脚连接】
+ * - WS2812 数据引脚 (DIN) : GPIO26 (JP3 接口)
+ *   ⚠️ 重要提醒：GPIO26 在开发板上与 LCD 屏幕背光 (BL) 共用！
+ *   调试板载 WS2812 时，请务必【拔下 JP7 背光跳线帽】，防止背光电路负载干扰纳秒级高频脉冲！
+ * - 用户按键 SW3           : GPIO39 (VN，仅作输入，按下为低电平)
+ * 
+ * 🛠️ 【核心外设驱动】
+ * - ESP-IDF RMT Driver (esp_driver_rmt / led_strip 官方组件)
+ * ======================================================================================
  */
 
 #include <stdio.h>
-#include <inttypes.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "esp_err.h"
+#include "led_strip.h"
 
-static const char *TAG = "LEVEL_5_RTOS";
+static const char *TAG = "LEVEL06_WS2812";
 
-// 引脚宏定义
-#define LED_PIN         GPIO_NUM_27  // 板载受控蓝色 LED2 (执行器)
-#define BUTTON_PIN      GPIO_NUM_39  // 用户按键 SW3 (中断生产者)
-#define PIR_PIN         GPIO_NUM_34  // SR602 人体红外探头 (传感器生产者)
+/* ========================== 硬件与灯效配置参数 ========================== */
+#define WS2812_GPIO_PIN         GPIO_NUM_26   // WS2812 数据控制引脚 (JP3)
+#define LED_STRIP_NUM_LEDS      8             // 灯珠数量（支持 1~N 颗，板载或外接灯条通用）
+#define BUTTON_SW3_PIN          GPIO_NUM_39   // 模式切换按键
 
-// ----------------------------------------------------------------------------
-// 1. 结构体定义：事件数据包（装进队列传送带的数据胶囊）
-// ----------------------------------------------------------------------------
+/* 灯效模式枚举 */
 typedef enum {
-    EVENT_BUTTON_PRESS,   // 用户按下 SW3 按键事件
-    EVENT_PIR_MOTION,     // SR602 感应到人体靠近事件
-    EVENT_PIR_VACANT,     // SR602 感应到人体离开事件
-    EVENT_SYSTEM_HEARTBEAT// 系统后台定时心跳事件
-} event_type_t;
+    MODE_RAINBOW_FLOW = 0,  // 1. 彩虹流光瀑布
+    MODE_BREATHE_PULSE,     // 2. HSV 呼吸渐变
+    MODE_THEATER_CHASE,     // 3. 影院跑马追逐
+    MODE_COMET_METEOR,      // 4. 流星拖尾光束
+    MODE_SOLID_CYCLE,       // 5. 纯色循环切换
+    MODE_MAX_COUNT
+} led_mode_t;
 
-typedef struct {
-    event_type_t type;    // 事件类别
-    int64_t timestamp_us; // 事件发生时间戳 (微秒)
-    uint32_t count;       // 事件累计计数
-    int sender_core;      // 发送者所在的 CPU 核心 (0 或 1)
-} app_event_t;
+static volatile led_mode_t g_current_mode = MODE_RAINBOW_FLOW;
+static led_strip_handle_t s_led_strip = NULL;
 
-// ----------------------------------------------------------------------------
-// 2. 全局句柄：FreeRTOS 消息队列
-// ----------------------------------------------------------------------------
-static QueueHandle_t g_event_queue = NULL;
+/* 模式名称文本映射 */
+static const char *MODE_NAMES[] = {
+    "🌈 [1/5] 彩虹流光瀑布 (Rainbow Flow)",
+    "🫁 [2/5] HSV 呼吸渐变 (Breathing Pulse)",
+    "🎬 [3/5] 影院跑马追逐 (Theater Chase)",
+    "☄️ [4/5] 流星拖尾光束 (Comet Meteor)",
+    "🎨 [5/5] 纯色循环切换 (Solid Cycle)"
+};
 
-// ----------------------------------------------------------------------------
-// 3. ⚡ 硬件中断服务函数 (ISR)：按键极速生产者
-// ----------------------------------------------------------------------------
-static void IRAM_ATTR button_isr_handler(void* arg)
+/**
+ * @brief HSV (Hue, Saturation, Value) 转 RGB (Red, Green, Blue)
+ * 
+ * @param h 色相角度: 0 ~ 359 (0°=红, 120°=绿, 240°=蓝)
+ * @param s 饱和度: 0 ~ 255 (0=白灰, 255=最纯艳纯色)
+ * @param v 明度/亮度: 0 ~ 255 (0=全黑, 255=最大亮度)
+ * @param[out] r 输出红色分量 (0 ~ 255)
+ * @param[out] g 输出绿色分量 (0 ~ 255)
+ * @param[out] b 输出蓝色分量 (0 ~ 255)
+ */
+static void hsv_to_rgb(uint32_t h, uint32_t s, uint32_t v, uint32_t *r, uint32_t *g, uint32_t *b)
 {
-    static int64_t last_intr_time = 0;
-    static uint32_t btn_press_count = 0;
+    if (s == 0) {
+        // 饱和度为 0 时为纯灰阶
+        *r = v;
+        *g = v;
+        *b = v;
+        return;
+    }
 
-    int64_t now = esp_timer_get_time();
+    h %= 360; // 限制在 0~359 范围内
+    uint32_t region = h / 60;      // 划分为 6 个 60° 扇区 (0~5)
+    uint32_t remainder = (h - (region * 60)) * 6; // 扇区内线性偏移量 (0~359)
 
-    // 150ms 简易消抖
-    if (now - last_intr_time > 150000) {
-        btn_press_count++;
-        last_intr_time = now;
+    uint32_t p = (v * (255 - s)) >> 8;
+    uint32_t q = (v * (255 - ((s * remainder) >> 8))) >> 8;
+    uint32_t t = (v * (255 - ((s * (360 - remainder)) >> 8))) >> 8;
 
-        // 打包事件胶囊
-        app_event_t event = {
-            .type = EVENT_BUTTON_PRESS,
-            .timestamp_us = now,
-            .count = btn_press_count,
-            .sender_core = xPortGetCoreID()
-        };
-
-        // 🌟 中断专用安全发队列 API
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-        xQueueSendFromISR(g_event_queue, &event, &xHigherPriorityTaskWoken);
-
-        // 如果唤醒了更高优先级的消费者任务，立即触发上下文切换
-        if (xHigherPriorityTaskWoken == pdTRUE) {
-            portYIELD_FROM_ISR();
-        }
+    switch (region) {
+        case 0: *r = v; *g = t; *b = p; break;
+        case 1: *r = q; *g = v; *b = p; break;
+        case 2: *r = p; *g = v; *b = t; break;
+        case 3: *r = p; *g = q; *b = v; break;
+        case 4: *r = t; *g = p; *b = v; break;
+        default: *r = v; *g = p; *b = q; break;
     }
 }
 
-// ----------------------------------------------------------------------------
-// 4. 任务 1：传感器后台采集生产者任务 (运行在 Core 0)
-// ----------------------------------------------------------------------------
-static void task_sensor_producer(void *pvParameters)
+/**
+ * @brief 初始化 WS2812 RMT 硬件外设
+ */
+static esp_err_t ws2812_init(void)
 {
-    ESP_LOGI(TAG, "🟢 [任务启动] task_sensor_producer 已就绪，绑定在 Core %d (优先级: %d)",
-             xPortGetCoreID(), uxTaskPriorityGet(NULL));
+    ESP_LOGI(TAG, "🔧 正在配置 RMT 硬件通道驱动 WS2812 (引脚: GPIO%d, 灯珠数: %d)...",
+             WS2812_GPIO_PIN, LED_STRIP_NUM_LEDS);
 
-    int last_pir_level = -1;
-    uint32_t pir_trigger_count = 0;
+    // 1. LED 灯带基础参数配置
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = WS2812_GPIO_PIN,
+        .max_leds = LED_STRIP_NUM_LEDS,
+        .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB, // WS2812 标准时序颜色排列为 GRB
+        .flags = {
+            .invert_out = false, // 正常高有效电平输出
+        }
+    };
+
+    // 2. RMT 硬件发生器参数配置
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000, // 10MHz 时基时钟 (1 个 tick = 100ns，满足纳秒级脉冲要求)
+        .mem_block_symbols = 64,           // 分配 RMT 内部硬件符号内存块
+        .flags = {
+            .with_dma = false,             // 灯珠数量较少时无需占用 DMA 通道
+        }
+    };
+
+    // 3. 创建并启动 RMT LED 灯带设备
+    esp_err_t err = led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led_strip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "❌ RMT 驱动初始化失败: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // 先全刷黑清屏，确保干净起始状态
+    led_strip_clear(s_led_strip);
+    ESP_LOGI(TAG, "✅ WS2812 RMT 驱动初始化成功！硬件纳秒脉冲引擎已就绪。");
+    return ESP_OK;
+}
+
+/**
+ * @brief 模式 1：彩虹流光瀑布动画 (Rainbow Flow)
+ */
+static void anim_rainbow_flow(uint32_t step)
+{
+    uint32_t r, g, b;
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        // 计算每个灯珠在色相环上的相位（360度分布）
+        uint32_t hue = (step * 5 + (i * 360 / LED_STRIP_NUM_LEDS)) % 360;
+        hsv_to_rgb(hue, 255, 180, &r, &g, &b);
+        led_strip_set_pixel(s_led_strip, i, r, g, b);
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 2：HSV 呼吸渐变 (Breathing Pulse)
+ */
+static void anim_breathing_pulse(uint32_t step)
+{
+    uint32_t r, g, b;
+    uint32_t hue = (step * 2) % 360;
+    
+    // 使用三角波计算平滑明度（从 10 呼吸到 220）
+    uint32_t phase = step % 100;
+    uint32_t val = (phase < 50) ? (10 + phase * 4) : (210 - (phase - 50) * 4);
+
+    hsv_to_rgb(hue, 255, val, &r, &g, &b);
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        led_strip_set_pixel(s_led_strip, i, r, g, b);
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 3：影院跑马追逐 (Theater Chase)
+ */
+static void anim_theater_chase(uint32_t step)
+{
+    uint32_t r, g, b;
+    uint32_t hue = (step * 10) % 360;
+    hsv_to_rgb(hue, 255, 200, &r, &g, &b);
+
+    int active_idx = step % 3;
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        if ((i + active_idx) % 3 == 0) {
+            led_strip_set_pixel(s_led_strip, i, r, g, b);
+        } else {
+            led_strip_set_pixel(s_led_strip, i, 0, 0, 0);
+        }
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 4：流星彗星拖尾 (Comet Meteor)
+ */
+static void anim_comet_meteor(uint32_t step)
+{
+    uint32_t r, g, b;
+    int head_pos = step % (LED_STRIP_NUM_LEDS + 4);
+    uint32_t hue = (step * 8) % 360;
+
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        int dist = head_pos - i;
+        if (dist == 0) {
+            // 彗星头部：极亮白色/主色
+            hsv_to_rgb(hue, 80, 255, &r, &g, &b);
+            led_strip_set_pixel(s_led_strip, i, r, g, b);
+        } else if (dist > 0 && dist <= 3) {
+            // 彗星尾巴：按距离衰减
+            uint32_t tail_val = 180 / (dist * 2);
+            hsv_to_rgb(hue, 255, tail_val, &r, &g, &b);
+            led_strip_set_pixel(s_led_strip, i, r, g, b);
+        } else {
+            led_strip_set_pixel(s_led_strip, i, 0, 0, 0);
+        }
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief 模式 5：经典纯色循环 (Solid Cycle)
+ */
+static void anim_solid_cycle(uint32_t step)
+{
+    static const uint32_t PALETTE[][3] = {
+        {255, 0, 0},     // 红
+        {255, 128, 0},   // 橙
+        {255, 255, 0},   // 黄
+        {0, 255, 0},     // 绿
+        {0, 255, 255},   // 青
+        {0, 0, 255},     // 蓝
+        {160, 32, 240},  // 紫
+        {255, 20, 147}   // 粉
+    };
+    int color_idx = (step / 30) % 8;
+    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
+        led_strip_set_pixel(s_led_strip, i, PALETTE[color_idx][0], PALETTE[color_idx][1], PALETTE[color_idx][2]);
+    }
+    led_strip_refresh(s_led_strip);
+}
+
+/**
+ * @brief WS2812 动画渲染总任务
+ */
+static void task_led_animation(void *arg)
+{
+    uint32_t step = 0;
+    ESP_LOGI(TAG, "🚀 灯效渲染任务已启动，帧率: 50 FPS (20ms/帧)");
 
     while (1) {
-        int current_pir_level = gpio_get_level(PIR_PIN);
+        switch (g_current_mode) {
+            case MODE_RAINBOW_FLOW:
+                anim_rainbow_flow(step);
+                vTaskDelay(pdMS_TO_TICKS(20)); // 50 FPS
+                break;
 
-        // 检测人体红外状态变化
-        if (current_pir_level != last_pir_level) {
-            pir_trigger_count++;
-            
-            app_event_t event = {
-                .type = (current_pir_level == 1) ? EVENT_PIR_MOTION : EVENT_PIR_VACANT,
-                .timestamp_us = esp_timer_get_time(),
-                .count = pir_trigger_count,
-                .sender_core = xPortGetCoreID()
-            };
+            case MODE_BREATHE_PULSE:
+                anim_breathing_pulse(step);
+                vTaskDelay(pdMS_TO_TICKS(25)); // 40 FPS
+                break;
 
-            // 发送到队列（等待超时 10ms）
-            xQueueSend(g_event_queue, &event, pdMS_TO_TICKS(10));
-            last_pir_level = current_pir_level;
+            case MODE_THEATER_CHASE:
+                anim_theater_chase(step);
+                vTaskDelay(pdMS_TO_TICKS(80)); // 较慢的跳跃步进
+                break;
+
+            case MODE_COMET_METEOR:
+                anim_comet_meteor(step);
+                vTaskDelay(pdMS_TO_TICKS(60));
+                break;
+
+            case MODE_SOLID_CYCLE:
+                anim_solid_cycle(step);
+                vTaskDelay(pdMS_TO_TICKS(20));
+                break;
+
+            default:
+                break;
         }
 
-        // 传感器检测周期：休眠 50ms (让出 Core 0 算力)
-        vTaskDelay(pdMS_TO_TICKS(50));
+        step++;
     }
 }
 
-// ----------------------------------------------------------------------------
-// 5. 任务 2：执行机构核心消费者任务 (运行在 Core 1)
-// ----------------------------------------------------------------------------
-static void task_actuator_consumer(void *pvParameters)
+/**
+ * @brief 按键监听任务：按下 SW3 切换下一组灯效
+ */
+static void task_button_control(void *arg)
 {
-    ESP_LOGI(TAG, "🔵 [任务启动] task_actuator_consumer 已就绪，绑定在 Core %d (优先级: %d)",
-             xPortGetCoreID(), uxTaskPriorityGet(NULL));
-
-    app_event_t rx_event;
-    bool led_state = false;
-    int64_t pir_auto_off_deadline = 0; // 红外自动关灯截止时间戳 (微秒)
-    bool pir_auto_light_active = false; // 是否正处于红外自动感应亮灯状态
-
-    while (1) {
-        // 🌟 动态超时策略：如果处于红外自动亮灯倒计时中，每 200ms 检查一次；平时死等(portMAX_DELAY，0% CPU)
-        TickType_t wait_ticks = pir_auto_light_active ? pdMS_TO_TICKS(200) : portMAX_DELAY;
-
-        if (xQueueReceive(g_event_queue, &rx_event, wait_ticks) == pdTRUE) {
-            
-            // 获取当前消费者运行所在的 CPU 核心
-            int consumer_core = xPortGetCoreID();
-            
-            switch (rx_event.type) {
-                case EVENT_BUTTON_PRESS:
-                    pir_auto_light_active = false; // 用户手动按键，退出自动感应模式
-                    led_state = !led_state;
-                    gpio_set_level(LED_PIN, led_state ? 1 : 0);
-                    ESP_LOGI(TAG, "⚡ [队列接收] 按键中断事件 #%lu | 发送端: Core %d ➔ 消费端: Core %d | 手动控制灯光: %s (耗时标记: %lld ms)",
-                             rx_event.count, rx_event.sender_core, consumer_core,
-                             led_state ? "🟢【点亮】" : "⚪【熄灭】",
-                             rx_event.timestamp_us / 1000);
-                    break;
-
-                case EVENT_PIR_MOTION:
-                    led_state = true;
-                    pir_auto_light_active = true;
-                    // 🌟 设定 5 秒 (5,000,000 微秒) 智能保持倒计时
-                    pir_auto_off_deadline = esp_timer_get_time() + 5000000;
-                    gpio_set_level(LED_PIN, 1);
-                    ESP_LOGW(TAG, "🚶‍♂️ [队列接收] 人体移动感应事件 #%lu | 发送端: Core %d ➔ 消费端: Core %d | 动作: 点亮蓝灯并开启 5 秒智能倒计时",
-                             rx_event.count, rx_event.sender_core, consumer_core);
-                    break;
-
-                case EVENT_PIR_VACANT:
-                    ESP_LOGI(TAG, "🍃 [队列接收] 人体离开感应事件 #%lu | 发送端: Core %d ➔ 消费端: Core %d | 状态: 进入 5 秒倒计时安全期，不立刻灭灯",
-                             rx_event.count, rx_event.sender_core, consumer_core);
-                    break;
-
-                case EVENT_SYSTEM_HEARTBEAT: {
-                    // 栈剩余空间探针 (Watermark: 返回该任务历史上最小剩余堆栈字数)
-                    UBaseType_t stack_remaining = uxTaskGetStackHighWaterMark(NULL);
-                    ESP_LOGI(TAG, "💓 [系统心跳 #%lu] 双核流水线运行正常 | 消费者剩余栈深: %u 字节",
-                             rx_event.count, (unsigned int)(stack_remaining * sizeof(StackType_t)));
-                    break;
-                }
-            }
-        }
-
-        // 🌟 检查红外 5 秒智能关灯倒计时是否到期
-        if (pir_auto_light_active) {
-            int64_t now = esp_timer_get_time();
-            if (now >= pir_auto_off_deadline) {
-                gpio_set_level(LED_PIN, 0);
-                led_state = false;
-                pir_auto_light_active = false;
-                ESP_LOGI(TAG, "⏱️ [智能延时] 5 秒无人活动倒计时结束，指示灯自动熄灭 (节能待机)");
-            }
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------
-// 6. 任务 3：系统后台心跳监视任务 (运行在 Core 0)
-// ----------------------------------------------------------------------------
-static void task_heartbeat(void *pvParameters)
-{
-    uint32_t heartbeat_count = 0;
-
-    while (1) {
-        // 每隔 5 秒向主队列投递一次心跳包
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        heartbeat_count++;
-
-        app_event_t event = {
-            .type = EVENT_SYSTEM_HEARTBEAT,
-            .timestamp_us = esp_timer_get_time(),
-            .count = heartbeat_count,
-            .sender_core = xPortGetCoreID()
-        };
-
-        xQueueSend(g_event_queue, &event, pdMS_TO_TICKS(10));
-    }
-}
-
-// ----------------------------------------------------------------------------
-// 7. 硬件外设初始化
-// ----------------------------------------------------------------------------
-static void init_hardware(void)
-{
-    // 初始化 LED (输出)
-    gpio_reset_pin(LED_PIN);
-    gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(LED_PIN, 0);
-
-    // 初始化 SR602 (输入)
-    gpio_reset_pin(PIR_PIN);
-    gpio_set_direction(PIR_PIN, GPIO_MODE_INPUT);
-
-    // 初始化 SW3 按键 (下降沿中断)
+    // 配置 GPIO39 为纯输入
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << BUTTON_PIN),
+        .pin_bit_mask = (1ULL << BUTTON_SW3_PIN),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_NEGEDGE
+        .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io_conf);
 
-    // 安装中断服务并挂载
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(BUTTON_PIN, button_isr_handler, (void*) BUTTON_PIN);
+    ESP_LOGI(TAG, "🔘 按键监听已就绪：按下 SW3 (GPIO39) 可即时切换灯效！");
 
-    ESP_LOGI(TAG, "✅ 硬件初始化就绪: LED2(GPIO27), SW3按键中断(GPIO39), SR602红外(GPIO34)");
+    int last_level = 1;
+
+    while (1) {
+        int current_level = gpio_get_level(BUTTON_SW3_PIN);
+        // 检测下降沿（由高电平 1 变低电平 0，表示按下）
+        if (last_level == 1 && current_level == 0) {
+            vTaskDelay(pdMS_TO_TICKS(20)); // 20ms 硬件消抖
+            if (gpio_get_level(BUTTON_SW3_PIN) == 0) {
+                // 切换下一个模式
+                g_current_mode = (g_current_mode + 1) % MODE_MAX_COUNT;
+                ESP_LOGW(TAG, "🔀 【用户按键触发】切换灯效为: %s", MODE_NAMES[g_current_mode]);
+                
+                // 等待按键释放
+                while (gpio_get_level(BUTTON_SW3_PIN) == 0) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                }
+            }
+        }
+        last_level = current_level;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 }
 
-// ----------------------------------------------------------------------------
-// 8. 主入口函数
-// ----------------------------------------------------------------------------
+/* ========================== 应用程序主入口 ========================== */
 void app_main(void)
 {
-    ESP_LOGI(TAG, "==================================================");
-    ESP_LOGI(TAG, "   🚀 关卡 5 启动：FreeRTOS 多任务与双核队列通信   ");
-    ESP_LOGI(TAG, "==================================================");
+    ESP_LOGI(TAG, "=======================================================");
+    ESP_LOGI(TAG, "🚀 LEVEL 06: ESP32 RMT 硬件脉冲外设与 WS2812 幻彩 RGB");
+    ESP_LOGI(TAG, "   主控架构: ESP32-D0WD-V3 (8MB Flash + 2MB PSRAM)");
+    ESP_LOGI(TAG, "   当前灯效: %s", MODE_NAMES[g_current_mode]);
+    ESP_LOGI(TAG, "   ⚠️ 提醒: 请拔下 JP7 跳线帽（断开背光），接通 JP3 WS2812");
+    ESP_LOGI(TAG, "=======================================================");
 
-    // 1. 初始化底层硬件
-    init_hardware();
+    // 1. 初始化 WS2812 RMT 驱动
+    ESP_ERROR_CHECK(ws2812_init());
 
-    // 2. 创建容量为 10 个事件胶囊的消息队列
-    g_event_queue = xQueueCreate(10, sizeof(app_event_t));
-    if (g_event_queue == NULL) {
-        ESP_LOGE(TAG, "❌ 错误：创建 FreeRTOS 消息队列失败！内存不足！");
-        return;
-    }
-    ESP_LOGI(TAG, "✅ FreeRTOS 消息队列已创建 (容量: 10 个数据包, 单包: %d 字节)", sizeof(app_event_t));
+    // 2. 创建灯效渲染任务（优先级 3，栈深度 3072 字节）
+    xTaskCreate(task_led_animation, "Task_LED_Anim", 3072, NULL, 3, NULL);
 
-    // 3. 创建多任务并绑定到指定 CPU 双核：
-    // 参数说明：任务函数, 任务名, 栈大小(字节), 参数, 优先级, 任务句柄, 绑定CPU核心(0/1)
-    
-    // 生产者 1：传感器采集任务 (绑定 Core 0, 栈 3KB, 优先级 2)
-    xTaskCreatePinnedToCore(task_sensor_producer, "task_sensor", 3072, NULL, 2, NULL, 0);
-
-    // 生产者 2：后台心跳定时任务 (绑定 Core 0, 栈 2KB, 优先级 1)
-    xTaskCreatePinnedToCore(task_heartbeat, "task_heartbeat", 2048, NULL, 1, NULL, 0);
-
-    // 消费者：执行器处理任务 (绑定 Core 1, 栈 3.5KB, 优先级 3 - 高优先级即时处理)
-    xTaskCreatePinnedToCore(task_actuator_consumer, "task_actuator", 3584, NULL, 3, NULL, 1);
-
-    ESP_LOGI(TAG, ">>> FreeRTOS 双核多任务流水线已全面启动！");
-    ESP_LOGI(TAG, ">>> 请尝试按下 SW3 按键，或靠近人体红外探头，观察跨核队列通信！");
+    // 3. 创建按键切换任务（优先级 2，栈深度 2048 字节）
+    xTaskCreate(task_button_control, "Task_Btn_Ctrl", 2048, NULL, 2, NULL);
 }
