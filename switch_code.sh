@@ -50,6 +50,7 @@ function list_experiments() {
         "11_lvgl_touch:第 11 关: LVGL 图形框架与电容触摸"
         "12_wifi_weather:第 12 关: WiFi 联网与 HTTP 天气时钟"
         "13_mqtt_iot:第 13 关: MQTT 物联网通信与手机远程控制"
+        "14_ble_gatt:第 14 关: BLE 蓝牙广播与手机透传遥控"
     )
 
     for entry in "${chapters[@]}"; do

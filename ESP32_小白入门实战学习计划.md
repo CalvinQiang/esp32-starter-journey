@@ -182,13 +182,13 @@
 - **核心知识**：MQTT 发布/订阅模型（Pub/Sub）、QoS 服务质量、微信公众号生动比喻、断线自动重连。
 
 #### 第 14 关：ESP32 BLE 低功耗蓝牙实战与微信小程序双向互联 📖 [【阅读深度教程】](./book/14_BLE低功耗蓝牙与微信小程序互联.md)
-- [ ] **打卡目标**：掌握低功耗蓝牙通信，用手机微信小程序直接免安装控制开发板。
-- **涉及协议**：BLE GATT 协议栈（NimBLE / Bluedroid）+ 微信小程序
+- [x] **打卡目标**：掌握低功耗蓝牙通信，用手机微信小程序/调试 App 免配网近场控制开发板。
+- **涉及协议**：BLE GATT 协议栈（Bluedroid）+ 手机蓝牙 App / 微信小程序
 - **实验内容**：
-  1. 配置 ESP32 为 BLE 外设，广播自定义设备名称（如 `ESP32-Smart-Hub`）。
-  2. 创建 GATT 服务与读写特征值（Read / Write / Notify）。
-  3. 使用手机微信小程序搜索连接蓝牙，向特征值发送数据控制开关，并接收开发板通知数据。
-- **核心知识**：BLE 广播包格式（Advertising）、GATT 架构（Service / Characteristic）、UUID 规则、手机端蓝牙交互流程。
+  1. 配置 ESP32 为 BLE 外设，广播自定义设备名称（`ESP32-Journey-Beacon`）。
+  2. 搭建 GATT Server，创建自定义 Service 与读写特征值（`0x00FF` / `0xFF01`）。
+  3. 综合大工程：手机写入控制板载 LED2，板载按键 SW3 触发主动 Notify 弹射推送至手机。
+- **核心知识**：BLE 广播包格式（Advertising）、GATT 树状架构（Service / Characteristic）、UUID 规则、手机端蓝牙交互流程。
 
 ---
 
