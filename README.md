@@ -70,7 +70,8 @@
 * 📘 [**第 06 章：ESP32 RMT 硬件脉冲外设与 WS2812 幻彩 RGB 跑马灯**](./book/06_RMT硬件脉冲与WS2812幻彩RGB.md)
 * 📘 [**第 07 章：ESP32 模拟量采集(ADC 测温)与超声波测距(温声融合雷达)**](./book/07_ADC模数转换与超声波测距.md)
 * 📘 [**第 08 章：ESP32 I2C 通信总线探秘与 DHT11 单总线温湿度解析**](./book/08_I2C总线探秘与DHT11温湿度解析.md)
-* 📘 *(第 09 ~ 18 章随实战路线持续推进)*
+* 📘 [**第 09 章：ESP32 NVS 非易失性存储与 Flash 偏好设置(断电不丢数据)**](./book/09_NVS非易失性存储与Flash偏好设置.md)
+* 📘 *(第 10 ~ 18 章随实战路线持续推进)*
 
 ---
 
@@ -87,7 +88,8 @@ code/
 ├── 05_freertos_queue/      # Level 05: 实验1(FreeRTOS多任务与双核队列通信)
 ├── 06_ws2812_rmt/          # Level 06: 实验1(RMT硬件脉冲与WS2812彩虹流光)
 ├── 07_adc_ultrasonic/      # Level 07: 实验1(ADC采样) / 实验2(NTC测温) / 实验3(超声波测距) / 实验4(温声雷达)
-└── 08_i2c_dht11/           # Level 08: 实验1(I2C Scanner) / 实验2(DHT11温湿度) / 实验3(双总线气象站)
+├── 08_i2c_dht11/           # Level 08: 实验1(I2C Scanner) / 实验2(DHT11温湿度) / 实验3(双总线气象站)
+└── 09_nvs_storage/         # Level 09: 实验1(开机计数器) / 实验2(用户偏好读写) / 实验3(配置管理与出厂重置)
 ```
 
 ### 🛠️ 使用 `switch_code.sh` 秒级切换与运行实验
@@ -99,11 +101,11 @@ code/
 ./switch_code.sh list
 
 # 2. 一键切换到指定关卡和实验 (部署到 main/app_main.c)
-./switch_code.sh 8 1          # 切换到第 08 关实验 1 (I2C 地址扫描器)
-./switch_code.sh 8 3          # 切换到第 08 关实验 3 (双总线气象站)
+./switch_code.sh 9 1          # 切换到第 09 关实验 1 (NVS 开机计数器)
+./switch_code.sh 9 3          # 切换到第 09 关实验 3 (出厂重置管理器)
 
 # 3. 一键切换并直接编译/烧录运行
-./switch_code.sh 8 3 --flash  # 切换到第 08 关实验 3 并自动烧录启动监视器
+./switch_code.sh 9 1 --flash  # 切换到第 09 关实验 1 并自动烧录启动监视器
 ```
 
 ---
@@ -125,7 +127,8 @@ code/
 │   ├── 05_freertos_queue/
 │   ├── 06_ws2812_rmt/
 │   ├── 07_adc_ultrasonic/
-│   └── 08_i2c_dht11/
+│   ├── 08_i2c_dht11/
+│   └── 09_nvs_storage/
 │
 ├── main/                          # 核心构建主入口
 │   ├── app_main.c                 # 当前激活关卡源码
@@ -143,6 +146,7 @@ code/
 │   ├── 06_RMT硬件脉冲与WS2812幻彩RGB.md
 │   ├── 07_ADC模数转换与超声波测距.md
 │   ├── 08_I2C总线探秘与DHT11温湿度解析.md
+│   ├── 09_NVS非易失性存储与Flash偏好设置.md
 │   └── ... (更多章节)
 │
 ├── docs/                          # 硬件原理图、实物照片与设计资料
