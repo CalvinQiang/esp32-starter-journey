@@ -580,31 +580,38 @@ static void task_actuator_consumer(void *pvParameters)
 {
     app_event_t rx_event;
     bool led_state = false;
+    int64_t pir_auto_off_deadline = 0; // 红外自动关灯截止时间戳 (微秒)
+    bool pir_auto_light_active = false; // 是否正处于红外自动感应亮灯状态
 
     while (1) {
-        // 阻塞等待消息队列 (零开销休眠)
-        if (xQueueReceive(g_event_queue, &rx_event, portMAX_DELAY) == pdTRUE) {
+        // 🌟 动态超时：处于 5 秒倒计时期间每 200ms 检查一次；平时死等(portMAX_DELAY，0% CPU)
+        TickType_t wait_ticks = pir_auto_light_active ? pdMS_TO_TICKS(200) : portMAX_DELAY;
+
+        if (xQueueReceive(g_event_queue, &rx_event, wait_ticks) == pdTRUE) {
             int consumer_core = xPortGetCoreID();
             
             switch (rx_event.type) {
                 case EVENT_BUTTON_PRESS:
+                    pir_auto_light_active = false; // 手动按键，退出自动感应
                     led_state = !led_state;
                     gpio_set_level(LED_PIN, led_state ? 1 : 0);
-                    ESP_LOGI(TAG, "⚡ [队列接收] 按键中断事件 #%lu | 发送: Core %d ➔ 消费: Core %d | 灯光翻转: %s",
+                    ESP_LOGI(TAG, "⚡ [队列接收] 按键中断事件 #%lu | 发送: Core %d ➔ 消费: Core %d | 手动控制: %s",
                              rx_event.count, rx_event.sender_core, consumer_core,
                              led_state ? "🟢【点亮】" : "⚪【熄灭】");
                     break;
 
                 case EVENT_PIR_MOTION:
+                    led_state = true;
+                    pir_auto_light_active = true;
+                    // 🌟 开启/续租 5 秒 (5,000,000 微秒) 智能倒计时
+                    pir_auto_off_deadline = esp_timer_get_time() + 5000000;
                     gpio_set_level(LED_PIN, 1);
-                    ESP_LOGW(TAG, "🚶‍♂️ [队列接收] 人体移动事件 #%lu | 发送: Core %d ➔ 消费: Core %d | 动作: 自动亮灯",
+                    ESP_LOGW(TAG, "🚶‍♂️ [队列接收] 人体移动事件 #%lu | 发送: Core %d ➔ 消费: Core %d | 动作: 开启 5 秒智能亮灯倒计时",
                              rx_event.count, rx_event.sender_core, consumer_core);
                     break;
 
                 case EVENT_PIR_VACANT:
-                    gpio_set_level(LED_PIN, 0);
-                    led_state = false;
-                    ESP_LOGI(TAG, "🍃 [队列接收] 人体离开事件 #%lu | 发送: Core %d ➔ 消费: Core %d | 动作: 自动熄灯",
+                    ESP_LOGI(TAG, "🍃 [队列接收] 人体离开事件 #%lu | 发送: Core %d ➔ 消费: Core %d | 状态: 进入 5 秒倒计时安全期，不立刻灭灯",
                              rx_event.count, rx_event.sender_core, consumer_core);
                     break;
 
@@ -614,6 +621,17 @@ static void task_actuator_consumer(void *pvParameters)
                              rx_event.count, (unsigned int)(stack_remaining * sizeof(StackType_t)));
                     break;
                 }
+            }
+        }
+
+        // 🌟 检查红外 5 秒智能关灯倒计时是否到期
+        if (pir_auto_light_active) {
+            int64_t now = esp_timer_get_time();
+            if (now >= pir_auto_off_deadline) {
+                gpio_set_level(LED_PIN, 0);
+                led_state = false;
+                pir_auto_light_active = false;
+                ESP_LOGI(TAG, "⏱️ [智能延时] 5 秒无人活动倒计时结束，指示灯自动熄灭 (节能待机)");
             }
         }
     }
