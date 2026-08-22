@@ -79,12 +79,12 @@ function list_experiments() {
 }
 
 # 参数解析
-if [ "$1" == "list" ] || [ "$1" == "-l" ]; then
+if [ "$1" == "list" ] || [ "$1" == "-l" ] || [ "$1" == "--list" ] || [ "$1" == "-list" ]; then
     list_experiments
     exit 0
 fi
 
-if [ -z "$1" ]; then
+if [ -z "$1" ] || [ "$1" == "-h" ] || [ "$1" == "--help" ] || [ "$1" == "help" ]; then
     print_usage
     exit 0
 fi
